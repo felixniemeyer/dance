@@ -1,0 +1,30 @@
+Ground Truth
+
+- Use data created from MIDI files for training
+  - Keep the specific notes and programs (general MIDI sound set) variable
+    - For a start
+      - kick and 
+      - snare
+      - (flash can be overall FFT engergy or so) 
+  - x2 by using different sound fonts
+
+- Use data from Nighthawks annotated manually for fine tuning
+
+- In both cases: 
+  - x5 by pitching up and down 2x
+  - x3 by adding reverb
+  - x3 by adding noise
+    - white noise
+    - some noise
+
+- Cut out 10s pieces
+  - sometimes combine one song with another
+  - audio and kicks.txt and snare.txt
+
+Training
+
+- Use Pytorch for defining the model and training
+- Convert to ONNX 
+- Use it in the browser with onnxruntime-web
+
+
