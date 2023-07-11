@@ -32,6 +32,12 @@ def get_wav_duration(wav_path):
         duration = frames / float(rate)
         return duration
 
+def abbreviate(string): 
+    # replace all whitespace with underscores
+    string = string.replace(' ', '_')
+    string = string.replace('-', '_')
+    return string.ljust(5, '_')[0:5]
+
 # load the data (folder structure: out/artist/song/*wav)
 chunk_count = 0
 for artist in os.listdir(args.in_path):
@@ -60,18 +66,21 @@ for artist in os.listdir(args.in_path):
                 duration = get_wav_duration(songpath + audio_file)
                 chunks = int(duration / chunk_length / 2)
                 cursor = 0
+
+                infile = songpath + audio_file
+                outfileprefix = args.out_path + '/' + '-'.join([abbreviate(artist), abbreviate(song), abbreviate(audio_file)]) + '-'
+
                 for i in range(chunks):
                     cursor += random.random() * chunk_length
 
                     pitch = args.min_pitch + random.random() * (1 - args.min_pitch)
 
                     start = cursor # / pitch
-                    infile = songpath + audio_file
-                    outfile = args.out_path + '/' + str(chunk_count) + '.opus'
+                    outfile = outfileprefix + str(chunk_count)
 
                     has_kicks_or_snares = False
                     # write relevant kicks and snares to file
-                    with open(args.out_path + '/' + str(chunk_count) + '.kicks', 'w') as f:
+                    with open(outfile + '.kicks', 'w') as f:
                         for kick in kicks:
                             time = kick / pitch - start 
                             if time >= 0 and time < chunk_length:
@@ -79,7 +88,7 @@ for artist in os.listdir(args.in_path):
                                 has_kicks_or_snares = True
                     
                     # same for snares
-                    with open(args.out_path + '/' + str(chunk_count) + '.snares', 'w') as f:
+                    with open(outfile + '.snares', 'w') as f:
                         for snare in snares:
                             time = snare / pitch - start 
                             if time >= 0 and time < chunk_length:
@@ -89,11 +98,11 @@ for artist in os.listdir(args.in_path):
                     if not has_kicks_or_snares:
                         # remove the 2 files
                         print('No kicks or snares in this chunk. Rolling back.')
-                        os.remove(args.out_path + '/' + str(chunk_count) + '.kicks')
-                        os.remove(args.out_path + '/' + str(chunk_count) + '.snares')
+                        os.remove(outfile + '.kicks')
+                        os.remove(outfile + '.snares')
                     else: 
                         af = f'atempo={pitch}'
-                        ffmpeg_cmd = f'ffmpeg -i "{infile}" -af "{af}" -ss {start} -t {chunk_length} "{outfile}"'
+                        ffmpeg_cmd = f'ffmpeg -i "{infile}" -af "{af}" -ss {start} -t {chunk_length} "{outfile + ".opus"}"'
                         print(ffmpeg_cmd)
                         os.system(ffmpeg_cmd)
 

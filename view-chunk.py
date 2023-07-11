@@ -40,7 +40,7 @@ with open(args.chunk + '.snares', 'r') as file:
 # Set labels and title
 plt.xlabel('Time [s]')
 plt.ylabel('Amplitude')
-plt.title('Chunk with kicks and snares')
+plt.title('Chunk with kicks (red) and snares (green)')
 
 # Display the plot
 plt.show()
