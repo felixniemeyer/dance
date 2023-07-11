@@ -4,35 +4,48 @@ import subprocess
 
 import time
 
-sample_rate = 44100
-bits = 16
+import argparse 
+
+parser = argparse.ArgumentParser(description='Generate songs with elements')
+parser.add_argument('--midi-path', type=str, default='lakh-midi-dataset-clean', help='path to the midi files')
+parser.add_argument('--soundfont-path', type=str, default='soundfonts', help='path to the soundfonts')
+parser.add_argument('--out-path', type=str, default='rendered-midi', help='path to the output directory')
+
+parser.add_argument('--sample-rate', type=int, default=44100, help='sample rate')
+parser.add_argument('--bits', type=int, default=16, help='bits')
+
+# parse arguments
+args = parser.parse_args()
+
+sample_rate = args.sample_rate
+bits = args.bits
 channels = 2
 
 # read all available soundfonts in the soundfonts folder
-print('Loading soundfonts from ./soundfonts') 
+print('Loading soundfonts from ' + args.soundfont_path)
 soundfontnames = []
 soundfonts = []
-for i, soundfont in enumerate(os.listdir('soundfonts')): 
+for i, soundfont in enumerate(os.listdir(args.soundfont_path)):
     if soundfont[-4:] == '.sf2':
         name = soundfont[0:-4]
         print(str(i + 1) + ". " + name)
         soundfontnames.append(name)
         soundfonts.append(soundfont)
 
-# mkdir out if it doesn't exist
-if not os.path.exists('out'):
-    os.mkdir('out')
+# mkdir out-path if it doesn't exist
+if not os.path.exists(args.out_path):
+    os.makedirs(args.out_path, exist_ok=True)
 
 
 print('\nRendering songs')
 # for every song in every artist dir
 count = 0
 skip = 32
-for artist in os.listdir('lakh-midi-dataset-clean'):
+for artist in os.listdir(args.midi_path):
     # continue if not a directory
-    if not os.path.isdir('lakh-midi-dataset-clean/' + artist):
+    if not os.path.isdir(args.midi_path + '/' + artist):
         continue
-    for song in os.listdir('lakh-midi-dataset-clean/' + artist):
+    for song in os.listdir(args.midi_path + '/' + artist):
         # just for reducing the dataset size
         if skip > 0: 
             skip -= 1
@@ -44,7 +57,7 @@ for artist in os.listdir('lakh-midi-dataset-clean'):
             print('\t' + msg) 
 
         try: 
-            midifile = 'lakh-midi-dataset-clean/' + artist + '/' + song
+            midifile = args.midi_path + '/' + artist + '/' + song
             print(str(count) + '. processing ' + artist + '/' + song) 
 
             mid = mido.MidiFile(midifile)
@@ -108,7 +121,7 @@ for artist in os.listdir('lakh-midi-dataset-clean'):
                 song_log('Skipping ' + artist + '/' + song + ' because it has no relevant percussion')
             else:
                 songname = song[0:-4]
-                outpath = 'out/' + artist + '/' + songname + '/' 
+                outpath = args.out_path + '/' + artist + '/' + songname + '/'
                 if not os.path.exists(outpath):
                     os.makedirs(outpath, exist_ok=True)
 
@@ -117,11 +130,11 @@ for artist in os.listdir('lakh-midi-dataset-clean'):
                 snares.sort()
 
                 # write kick timestamps to a file
-                with open('out/' + artist + '/' + songname + '/kicks.txt', 'w') as f:
+                with open(outpath + 'kicks.txt', 'w') as f:
                     for msg in kicks:
                         f.write(str(msg) + '\n')
                 # write snare timestamps to a file
-                with open('out/' + artist + '/' + songname + '/snares.txt', 'w') as f:
+                with open(outpath + 'snares.txt', 'w') as f:
                     for msg in snares:
                         f.write(str(msg) + '\n')
 
@@ -142,7 +155,7 @@ for artist in os.listdir('lakh-midi-dataset-clean'):
                         '-g', '1', 
                         '-O', f's{bits}', 
                         '-r', str(sample_rate),
-                        f'soundfonts/{soundfonts[font]}', 
+                        f'{args.soundfont_path}/{soundfonts[font]}',
                         midifile,
                     ], stderr=subprocess.DEVNULL) # muting errors
                     max_size = (duration + 1) * sample_rate * channels * bits / 8 

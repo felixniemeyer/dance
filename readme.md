@@ -19,7 +19,8 @@ They get send on channel 10 (which is represented by number 9) and have a specif
 That makes midi files a good source of ground truth.
 
 For generating ground truth from midi data, you will need
-- lakh-midi-dataset-clean, the songs in midi format
+- to install FluidSynth on your system, 
+- lakh-midi-dataset-clean, the songs in midi format, and
 - some soundfonts in a `./soundfonts` directory
 
 ## from 4 to the floor tracks
