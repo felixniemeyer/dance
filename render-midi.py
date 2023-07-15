@@ -15,6 +15,9 @@ parser.add_argument('--sample-rate', type=int, default=44100, help='sample rate'
 parser.add_argument('--bits', type=int, default=16, help='bits')
 parser.add_argument('--max-song-length', type=int, default=900, help='max song length in seconds')
 
+parser.add_argument('--skip', type=int, default=0, help='process only every nth song when --midi-path is used')
+parser.add_argument('--override', default=False, action='store_true', help='override existing files')
+
 # parse arguments
 args = parser.parse_args()
 
@@ -60,38 +63,33 @@ def generate_song(midifile, outpath, soundfonts):
 
         hasRelevantPercussion = False
 
+        ticks_per_beat = mid.ticks_per_beat
+        print('ticks per beat: ' + str(ticks_per_beat))
+
+        class TempoChange:
+            def __init__(self, tick, tempo):
+                self.at_tick = tick
+                self.tempo = tempo
+
+        tempo_changes = []
 
         for i, track in enumerate(mid.tracks):
             # look for program change to drums
-            ticks_per_beat = mid.ticks_per_beat
 
             trackKicks = []
             trackSnares = []
-            tempo = 500000 
             ticks = 0
-
-            accumulated_time = 0
-
-            using_default_tempo = True
-            tempo_changed = False
 
             for msg in track:
                 ticks += msg.time
                 if msg.type == 'set_tempo':
-                    accumulated_time += mido.tick2second(ticks, ticks_per_beat, tempo)
-                    if using_default_tempo: 
-                        using_default_tempo = False
-                    elif tempo != msg.tempo:
-                        tempo_changed = True
-                    tempo = msg.tempo
-                    ticks = 0
-                time = accumulated_time + mido.tick2second(ticks, ticks_per_beat, tempo)
+                    tempo_changes.append(TempoChange(ticks, msg.tempo))
                 if msg.type == 'note_on': 
                     if msg.channel == 9:
                         if msg.note == 36 or msg.note == 35:
-                            trackKicks.append(time) 
+                            trackKicks.append(ticks) 
                         if msg.note >= 37 and msg.note <= 40:
-                            trackSnares.append(time)
+                            trackSnares.append(ticks)
 
             if(len(trackKicks) > 10 or len(trackSnares) > 10):
                 hasRelevantPercussion = True
@@ -99,11 +97,8 @@ def generate_song(midifile, outpath, soundfonts):
                 kicks += trackKicks
                 snares += trackSnares
 
-            if tempo_changed:
-                print('tempo in this song changes') 
-
         if not hasRelevantPercussion: 
-            print('Skipping ' + artist + '/' + song + ' because it has no relevant percussion')
+            print('Skipping ' + midifile + ' because it has no relevant percussion')
         else:
             if not os.path.exists(outpath):
                 os.makedirs(outpath, exist_ok=True)
@@ -111,6 +106,21 @@ def generate_song(midifile, outpath, soundfonts):
             # sort kicks and snares by time
             kicks.sort()
             snares.sort()
+            tempo_changes.sort(key=lambda x: x.at_tick)
+
+            for tickstamps in [kicks, snares]: 
+                tempo = 500000
+                tcp = 0 # tempo change pointer
+                accumulated_time = 0
+                accumulated_ticks = 0
+                for i in range(len(tickstamps)):
+                    tickstamp = tickstamps[i]
+                    while tcp < len(tempo_changes) and tempo_changes[tcp].at_tick <= tickstamp:
+                        accumulated_time += mido.tick2second(tempo_changes[tcp].at_tick - accumulated_ticks, ticks_per_beat, tempo)
+                        accumulated_ticks = tempo_changes[tcp].at_tick
+                        tempo = tempo_changes[tcp].tempo
+                        tcp += 1
+                    tickstamps[i] = accumulated_time + mido.tick2second(tickstamp - accumulated_ticks, ticks_per_beat, tempo)
 
             # write kick timestamps to a file
             kicksfile = os.path.join(outpath, 'kicks.txt')
@@ -127,8 +137,8 @@ def generate_song(midifile, outpath, soundfonts):
                 outfile = os.path.join(outpath, soundfont.name + '.wav')
 
                 # check if file already exists 
-                if os.path.exists(outfile):
-                    print('Skipping ' + artist + '/' + song + ' because it already exists')
+                if not args.override and os.path.exists(outfile):
+                    print('Skipping ' + outfile + ' because it already exists')
                 else: 
                     print('Rendering midi using soundfont ' + soundfont.name)
                     p = subprocess.Popen([
@@ -165,7 +175,7 @@ def generate_song(midifile, outpath, soundfonts):
                         raise Exception('Fluidsynth returned non-zero exit code')
 
     except Exception as e:
-        print('Error processing ' + artist + '/' + song)
+        print('Error processing ' + midifile)
         print(str(e))
 
 
@@ -183,13 +193,16 @@ else:
         if not os.path.isdir(args.midi_path + '/' + artist):
             continue
         for song in os.listdir(args.midi_path + '/' + artist):
-            midifile = args.midi_path + '/' + artist + '/' + song
-            print('\n\n') 
-            print(str(count) + '. processing ' + artist + '/' + song) 
+            if count % args.skip == 0: 
+                midifile = args.midi_path + '/' + artist + '/' + song
+                print('\n\n') 
+                print(str(count) + '. processing ' + artist + '/' + song) 
 
-            songname = song[0:-4]
-            outpath = args.out_path + '/' + artist + '/' + songname + '/'
+                songname = song[0:-4]
+                outpath = args.out_path + '/' + artist + '/' + songname + '/'
 
-            generate_song(midifile, outpath, [soundfonts[count % len(soundfonts)]])
+                generate_song(midifile, outpath, [soundfonts[count % len(soundfonts)]])
 
             count += 1
+
+            
