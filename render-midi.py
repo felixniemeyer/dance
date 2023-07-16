@@ -2,7 +2,11 @@ import os
 import mido
 import subprocess
 
+import multiprocessing
+
 import argparse 
+
+import traceback
 
 parser = argparse.ArgumentParser(description='Generate songs with elements')
 parser.add_argument('--midi-path', type=str, default='lakh-midi-dataset-clean', help='path to the midi files')
@@ -25,6 +29,32 @@ sample_rate = args.sample_rate
 bits = args.bits
 channels = 2
 
+processes = []
+
+def convert_to_ogg(file_without_extension):
+    # convert wav to ogg using ffmpeg in the background
+    print('inside convert_to_ogg')
+    try: 
+        return_code = subprocess.call([
+            'ffmpeg',
+            '-n', # no overwrite
+            '-v', 'warning',
+            '-i', file_without_extension + ".wav",
+            '-c:a', 'libvorbis',
+            '-qscale:a', '2',
+            '-ar', str(sample_rate),
+            file_without_extension + ".ogg"
+        ])
+        # remove wav
+        if return_code == 0:
+            print('Deleting wav after conversion of ' + file_without_extension)
+            os.remove(file_without_extension + ".wav")
+        else: 
+            print('Conversion failed for ' + file_without_extension)
+    except Exception as e:
+        print('Exception while converting to ogg: ' + str(e))
+        traceback.print_exc()
+
 class Soundfont: 
     def __init__(self, name, path):
         self.name = name
@@ -39,6 +69,7 @@ for i, soundfont in enumerate(os.listdir(args.soundfont_path)):
         print(str(i + 1) + ". " + name)
         path = os.path.join(args.soundfont_path, soundfont)
         soundfonts.append(Soundfont(name, path))
+print()
 
 # mkdir out-path if it doesn't exist
 if not os.path.exists(args.out_path):
@@ -134,7 +165,8 @@ def generate_song(midifile, outpath, soundfonts):
                     f.write(str(msg) + '\n')
 
             for soundfont in soundfonts: 
-                outfile = os.path.join(outpath, soundfont.name + '.wav')
+                outfile_without_ext = os.path.join(outpath, soundfont.name)
+                outfile = outfile_without_ext + '.wav'
 
                 # check if file already exists 
                 if not args.override and os.path.exists(outfile):
@@ -146,7 +178,7 @@ def generate_song(midifile, outpath, soundfonts):
                         '-F', outfile, 
                         '-ni', 
                         '-a', 'file'
-                        '-g', '1', 
+                        '--gain', '1', 
                         '-O', f's{bits}', 
                         '-r', str(sample_rate),
                         soundfont.path,
@@ -173,11 +205,18 @@ def generate_song(midifile, outpath, soundfonts):
                         print('Fluidsynth returned non-zero exit code')
                         os.remove(outfile) # if an error occured, it's better to remove the file
                         raise Exception('Fluidsynth returned non-zero exit code')
+                    else: 
+                        print('Converting wav to ogg in background')
+                        try: 
+                            process = multiprocessing.Process(target=convert_to_ogg, args=(outfile_without_ext,))
+                            process.start()
+                            processes.append(process)
+                        except Exception as e:
+                            print('Error converting to ogg', str(e))
 
     except Exception as e:
         print('Error processing ' + midifile)
         print(str(e))
-
 
 if args.single_file != None:
     print('Rendering single song' + args.single_file)
@@ -193,7 +232,7 @@ else:
         if not os.path.isdir(args.midi_path + '/' + artist):
             continue
         for song in os.listdir(args.midi_path + '/' + artist):
-            if count % args.skip == 0: 
+            if count % (args.skip + 1) == 0: 
                 midifile = args.midi_path + '/' + artist + '/' + song
                 print('\n\n') 
                 print(str(count) + '. processing ' + artist + '/' + song) 
@@ -206,3 +245,6 @@ else:
             count += 1
 
             
+# wait for all threads to finish
+for process in processes:
+    process.join()

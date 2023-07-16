@@ -21,8 +21,8 @@ args = parser.parse_args()
 
 if args.chunk is not None:
     # strip .opus from chunk name if present
-    if args.chunk.endswith('.opus'):
-        args.chunk = args.chunk[:-5]
+    if args.chunk.endswith('.ogg'):
+        args.chunk = args.chunk[:-4]
     audiofile = args.chunk + '.opus'
     kickfile = args.chunk + '.kicks'
     snarefile = args.chunk + '.snares'
