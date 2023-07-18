@@ -7,32 +7,41 @@ import argparse
 
 import soundfile
 
+import threading 
 import subprocess
 
 parser = argparse.ArgumentParser(description='Chop up the songs into chunkgs')
 parser.add_argument('--in-path', type=str, default='rendered-midi', help='path to the midi-to-audio-out directory')
 parser.add_argument('--out-path', type=str, default='chunks', help='path to the output directory')
 parser.add_argument('--chunk-length', type=int, default=16, help='length of the chunks in seconds')
-parser.add_argument('--min-pitch', type=float, default=0.85, help='will choose random pitches between this and 1')
+parser.add_argument('--min-pitch', type=float, default=0.79, help='will choose random pitches between this and 1')
 
 parser.add_argument('--sample-rate', type=int, default=44100, help='sample rate')
 
 parser.add_argument('--min-low-pass', type=float, default=4000, help='will choose random low pass between this and 24000')
-parser.add_argument('--max-high-pass', type=float, default=500, help='will choose random low pass between 0 and this')
+parser.add_argument('--max-high-pass', type=float, default=300, help='will choose random low pass between 0 and this')
+parser.add_argument('--high-pass-chance', type=float, default=0.5, help='chance to apply high pass')
+parser.add_argument('--low-pass-chance', type=float, default=0.5, help='chance to apply low pass')
 
 parser.add_argument('--min-volume', type=float, default=1, help='will choose random gain between this and --max-volume')
 parser.add_argument('--max-volume', type=float, default=2, help='will choose random gain between --min-volume and this')
 
 parser.add_argument('--max-noise', type=float, default=0.05, help='will choose random low pass between this and 1')
+parser.add_argument('--noise-chance', type=float, default=0.5, help='chance to apply noise')
 
 parser.add_argument('--max-overdrive', type=float, default=0, help='will choose random low pass between this and 1')
+parser.add_argument('--overdrive-chance', type=float, default=0.5, help='chance to apply overdrive')
 
 parser.add_argument('--dry-run', default=False, help='dry run')
+
+parser.add_argument('--max-processes', type=int, default=9, help='max processes to use')
 
 # parse arguments
 args = parser.parse_args()
 
 chunk_length = args.chunk_length
+
+threads = []
 
 # mk out-path if it doesn't exist
 if not os.path.exists(args.out_path):
@@ -45,7 +54,19 @@ def abbreviate(string):
     string = string.ljust(6, '_')
     return string[0:3] + string[-3:]
 
-# load the data (folder structure: out/artist/song/*.ogg)
+def call_ffmpeg(command, outfile): 
+    print(' '.join(ffmpeg_call))
+    try: 
+        subprocess.check_call(command)
+    except KeyboardInterrupt:
+        print('\nAborting')
+        exit(0)
+    except:
+        print('ffmpeg failed. Rolling back.')
+        os.remove(outfile + '.kicks')
+        os.remove(outfile + '.snares')
+        os.remove(outfile + '.ogg')
+
 chunk_count = 0
 for artist in os.listdir(args.in_path):
     for song in os.listdir(args.in_path + '/' + artist):
@@ -114,21 +135,28 @@ for artist in os.listdir(args.in_path):
                         os.remove(outfile + '.snares')
                     else: 
                         volume = args.min_volume + random.random() * (args.max_volume - args.min_volume)
-                        lowpass = args.min_low_pass + (1 - random.random() ** 2) * (args.sample_rate / 2 - args.min_low_pass)
-                        highpass = args.max_high_pass * random.random() ** 2
-                        compress_level_in = 1 + random.random() * args.max_overdrive
-                        compress_threshold = 0.5 + 0.4 * random.random() 
-                        compress_ratio = 20
-                        compress_mix = 0.0 + 0.1 * random.random() * args.max_overdrive
-                        noise = random.random() ** 2 * args.max_noise
 
                         prenoise_af = f'atempo={pitch}'
                         prenoise_af += f',atrim=start={start}:end={start + chunk_length}'
 
                         postnoise_af = f'volume={volume}'
-                        prenoise_af += f',lowpass=f={lowpass}'
-                        prenoise_af += f',highpass=f={highpass}'
-                        prenoise_af += f',acompressor=level_in={compress_level_in}:threshold={compress_threshold}:ratio={compress_ratio}:mix={compress_mix}:attack=0.1:release=0.1'
+                        if args.low_pass_chance > random.random():
+                            lowpass = args.min_low_pass + (1 - random.random() ** 2) * (args.sample_rate / 2 - args.min_low_pass)
+                            prenoise_af += f',lowpass=f={lowpass}'
+                        if args.high_pass_chance > random.random():
+                            highpass = args.max_high_pass * random.random() ** 2
+                            prenoise_af += f',highpass=f={highpass}'
+
+                        if args.overdrive_chance > random.random():
+                            compress_level_in = 1 + random.random() * args.max_overdrive
+                            compress_threshold = 0.5 + 0.4 * random.random() 
+                            compress_ratio = 20
+                            compress_mix = 0.0 + 0.1 * random.random() * args.max_overdrive
+                            prenoise_af += f',acompressor=level_in={compress_level_in}:threshold={compress_threshold}:ratio={compress_ratio}:mix={compress_mix}:attack=0.1:release=0.1'
+
+                        noise = random.random() ** 2 * args.max_noise
+                        if args.noise_chance < random.random():
+                            noise = 0
 
                         fc = f'[0:a]{prenoise_af}[musik];[1:a]volume={noise}[noise];[musik][noise]amix=inputs=2[master];[master]{postnoise_af}[aout]'
 
@@ -148,15 +176,18 @@ for artist in os.listdir(args.in_path):
                         ffmpeg_args += [outfile + '.ogg']
 
                         ffmpeg_call = ['ffmpeg'] + ffmpeg_args
-                        print(' '.join(ffmpeg_call))
                         try: 
-                            subprocess.check_call(ffmpeg_call)
-                        except KeyboardInterrupt:
-                            print('\nAborting')
-                            exit(0)
-                        except:
-                            print('ffmpeg failed. Rolling back.')
-                            os.remove(outfile + '.kicks')
-                            os.remove(outfile + '.snares')
-                            os.remove(outfile + '.ogg')
+                            thread = threading.Thread(target=call_ffmpeg, args=(ffmpeg_call, outfile))
+                            thread.start()
+                            threads.append(thread)
+                            if len(threads) >= args.max_processes:
+                                threads[0].join()
+                                threads.pop(0)
+                        except Exception as e:
+                            print('Asynchronous call_ffmpeg failed.')
+
+for thread in threads:
+    thread.join()
+
+print('Done. Created', chunk_count, 'chunks.')
 

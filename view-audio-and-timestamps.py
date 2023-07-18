@@ -14,16 +14,16 @@ parser = argparse.ArgumentParser(
     'Either provide a path to a chunk (--chunk) or to a rendered midi (--rendered-midi)'
 ) 
 
-parser.add_argument('--chunk', help='chunk to view. timestamp files are expected to be named the same as the .opus audio file but with file endings .kicks or .snares respectively', type=str)
+parser.add_argument('--chunk', help='chunk to view. timestamp files are expected to be named the same as the .ogg audio file but with file endings .kicks or .snares respectively', type=str)
 parser.add_argument('--rendered-midi', help='rendered midi to view. timestamp files are expected to be in the same directory and named kicks.txt or snares.txt respectively') 
 
 args = parser.parse_args()
 
 if args.chunk is not None:
-    # strip .opus from chunk name if present
+    # strip .ogg from chunk name if present
     if args.chunk.endswith('.ogg'):
         args.chunk = args.chunk[:-4]
-    audiofile = args.chunk + '.opus'
+    audiofile = args.chunk + '.ogg'
     kickfile = args.chunk + '.kicks'
     snarefile = args.chunk + '.snares'
 elif args.rendered_midi is not None:

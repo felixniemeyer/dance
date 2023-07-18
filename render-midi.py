@@ -2,7 +2,7 @@ import os
 import mido
 import subprocess
 
-import multiprocessing
+import threading
 
 import argparse 
 
@@ -21,6 +21,7 @@ parser.add_argument('--max-song-length', type=int, default=900, help='max song l
 
 parser.add_argument('--skip', type=int, default=0, help='process only every nth song when --midi-path is used')
 parser.add_argument('--override', default=False, action='store_true', help='override existing files')
+parser.add_argument('--max-processes', type=int, default=9, help='max processes to use')
 
 # parse arguments
 args = parser.parse_args()
@@ -29,11 +30,10 @@ sample_rate = args.sample_rate
 bits = args.bits
 channels = 2
 
-processes = []
+threads = []
 
 def convert_to_ogg(file_without_extension):
     # convert wav to ogg using ffmpeg in the background
-    print('inside convert_to_ogg')
     try: 
         return_code = subprocess.call([
             'ffmpeg',
@@ -41,7 +41,7 @@ def convert_to_ogg(file_without_extension):
             '-v', 'warning',
             '-i', file_without_extension + ".wav",
             '-c:a', 'libvorbis',
-            '-qscale:a', '2',
+            '-qscale:a', '6',
             '-ar', str(sample_rate),
             file_without_extension + ".ogg"
         ])
@@ -169,7 +169,7 @@ def generate_song(midifile, outpath, soundfonts):
                 outfile = outfile_without_ext + '.wav'
 
                 # check if file already exists 
-                if not args.override and os.path.exists(outfile):
+                if not args.override and os.path.exists(outfile_without_ext + '.ogg'):
                     print('Skipping ' + outfile + ' because it already exists')
                 else: 
                     print('Rendering midi using soundfont ' + soundfont.name)
@@ -208,9 +208,12 @@ def generate_song(midifile, outpath, soundfonts):
                     else: 
                         print('Converting wav to ogg in background')
                         try: 
-                            process = multiprocessing.Process(target=convert_to_ogg, args=(outfile_without_ext,))
-                            process.start()
-                            processes.append(process)
+                            thread = threading.Thread(target=convert_to_ogg, args=(outfile_without_ext,))
+                            thread.start()
+                            threads.append(thread)
+                            if len(threads) >= args.max_processes:
+                                threads[0].join()
+                                threads.pop(0)
                         except Exception as e:
                             print('Error converting to ogg', str(e))
 
@@ -227,6 +230,7 @@ else:
     print('Rendering songs from ' + args.midi_path)
     # for every song in every artist dir
     count = 0
+    processed_count = 0
     for artist in os.listdir(args.midi_path):
         # continue if not a directory
         if not os.path.isdir(args.midi_path + '/' + artist):
@@ -240,11 +244,12 @@ else:
                 songname = song[0:-4]
                 outpath = args.out_path + '/' + artist + '/' + songname + '/'
 
-                generate_song(midifile, outpath, [soundfonts[count % len(soundfonts)]])
+                generate_song(midifile, outpath, [soundfonts[processed_count % len(soundfonts)]])
+                
+                processed_count += 1
 
             count += 1
-
             
 # wait for all threads to finish
-for process in processes:
-    process.join()
+for thread in threads:
+    thread.join()
