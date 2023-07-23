@@ -1,22 +1,40 @@
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
 
-batch_size = 128
+from dance_data import DanceDataset
+from dancer_model import DancerModel
+
+from torch.utils.data import Dataset, DataLoader, random_split
+
+import config
+
+batch_size = 1
+learning_rate = 1e-3
 
 # Assuming you have prepared your dataset and DataLoader
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size)
+dataset = DanceDataset("./chunks")
+print('dataset size: ', len(dataset))
+
+train_size = int(0.8 * len(dataset))
+val_size = len(dataset) - train_size
+
+train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+
+train_loader = DataLoader(train_dataset, batch_size=batch_size)
+val_loader = DataLoader(val_dataset)
 
 # Initialize the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = AudioClassifier(num_classes).to(device)
+
+# Load model from disk if it exists
+model = DancerModel().to(device)
 
 # Define loss function and optimizer
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+num_epochs = 10
 
 # Training loop
 for epoch in range(num_epochs):
@@ -57,3 +75,4 @@ for epoch in range(num_epochs):
         print(f"Epoch [{epoch+1}/{num_epochs}], Validation Accuracy: {accuracy:.4f}")
 
 # Training completed
+

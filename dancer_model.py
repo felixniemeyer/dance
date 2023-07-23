@@ -1,29 +1,16 @@
 import torch.nn as nn
 
-bitrate = 16
-sample_rate = 44100
-duration = 16
-channels = 2
-buffer_size = 512
+import config
 
-size = bitrate * sample_rate * duration * channels
+import argparse
 
-buffers_per_file = sample_rate * duration // buffer_size
+parser = argparse.ArgumentParser()
 
-offset = sample_rate * duration % buffer_size
+parser.add_argument("--num_epochs", type=int, default=20)
 
-# print info
-print(f"bitrate: {bitrate}")
-print(f"sample_rate: {sample_rate}")
-print(f"duration: {duration}")
-print(f"channels: {channels}")
-print(f"size: {size}")
-print(f"buffers_per_file: {buffers_per_file}")
-print(f"offset: {offset}")
-
-class Dancer(nn.Module):
+class DancerModel(nn.Module):
     def __init__(self):
-        super(Dancer, self).__init__()
+        super(DancerModel, self).__init__()
 
         self.conv_layers = nn.Sequential(
             nn.Conv1d(
@@ -58,8 +45,7 @@ class Dancer(nn.Module):
 
     def forward(self, x):
         x = self.conv_layers(x)
-        x = self.rnn(x)
+        x, _ = self.rnn(x)
         x = self.fc_layers(x)
         x = self.output(x)
         return x
-
