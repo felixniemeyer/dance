@@ -3,4 +3,4 @@ lakh-midi-dataset-clean/
 rendered-midi/
 soundfonts/
 venv/
-
+__pycache__/

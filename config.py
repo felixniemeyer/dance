@@ -14,7 +14,6 @@ sequence_size = sample_rate * chunk_duration // buffer_size
 sequence_offset = sample_rate * chunk_duration % buffer_size
 
 # print info
-print("config (edit config.py to make changes)")
 print(f"bitrate: {bitrate}")
 print(f"sample_rate: {sample_rate}")
 print(f"chunk duration: {chunk_duration}")

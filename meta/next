@@ -1,0 +1,20 @@
+- for some reason there are ogg chunks without kicks and snare files
+  - only this track affected: './chunks/Batsti-Il_o.1-Flu_GM-*
+
+- D: store model
+
+- irgendwie den Input zusammenbringen mit dem training und so. 
+- Vielleicht muss ich dafür verstehen, wie optimize genau funktioniert. 
+
+- D: python lsp zum laufen bekommen
+
+- generate equally many sequences in which the last one 
+  - has an event
+  - has no event
+  - by 
+    - reducing the sequence length to 1024 
+    - and advancing to a kick or snare buffer
+    - cutting away from the left
+  - won't help, because training happens on all
+
+
