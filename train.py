@@ -20,11 +20,11 @@ parser.add_argument("--num_epochs", type=int, default=10)
 
 args = parser.parse_args()
 
-batch_size = 128 # number of sequences per batch
-learning_rate = 5e-3
+batch_size = 32 # number of sequences per batch
+learning_rate = 2e-3
 
 # Assuming you have prepared your dataset and DataLoader
-dataset = DanceDataset("./chunks") # , 4 * 4 * 5)
+dataset = DanceDataset("./chunks")
 print('dataset size: ', len(dataset))
 print()
 

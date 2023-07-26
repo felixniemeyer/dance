@@ -60,7 +60,7 @@ class DancerModel(nn.Module):
         cnn_inputs = batch_inputs.view(-1, config.channels, config.buffer_size)
         cnn_outputs = self.conv_layers(cnn_inputs)
 
-        cnn_outputs = cnn_outputs.view(self.batch_size, config.sequence_size, -1)
+        cnn_outputs = cnn_outputs.view(batch_inputs.shape[0], config.sequence_size, -1)
 
         x, _ = self.rnn(cnn_outputs)
 
