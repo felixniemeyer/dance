@@ -13,15 +13,16 @@ import argparse
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--continue_from", type=str, default=None)
-parser.add_argument("--save_to", type=str, default='./checkpoint.pt')
+parser.add_argument("-i", "--continue_from", type=str, default=None, help="path to checkpoint to continue from")
+parser.add_argument("-o", "--save_to", type=str, default=None, help="path to save checkpoint to")
 
-parser.add_argument("--num_epochs", type=int, default=10)
+parser.add_argument("-e", "--num_epochs", type=int, default=10, help="number of epochs to train for")
+parser.add_argument("-r", "--learning_rate", type=float, default=1e-3, help="learning rate")
+parser.add_argument("-b", "--batch_size", type=int, default=16, help="batch size")
 
 args = parser.parse_args()
 
-batch_size = 32 # number of sequences per batch
-learning_rate = 2e-3
+batch_size = args.batch_size
 
 # Assuming you have prepared your dataset and DataLoader
 dataset = DanceDataset("./chunks")
@@ -40,10 +41,10 @@ val_loader = DataLoader(val_dataset, batch_size=batch_size)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Load model from disk if it exists
-model = DancerModel(batch_size).to(device)
+model = DancerModel().to(device)
 first_epoch = 0
 
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 
 if args.continue_from is not None:
     checkpoint = torch.load(args.continue_from)
@@ -108,6 +109,8 @@ for epoch in range(first_epoch, last_epoch):
     print()
 
 # save checkpoint
+if args.save_to is None:
+    args.save_to = f"checkpoint-{last_epoch}.pt"
 print('saving model to', args.save_to)
 torch.save({
     'model_state_dict': model.state_dict(),

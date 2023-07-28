@@ -10,10 +10,8 @@ parser.add_argument("--num_epochs", type=int, default=20)
 
 
 class DancerModel(nn.Module):
-    def __init__(self, batch_size):
+    def __init__(self):
         super(DancerModel, self).__init__()
-
-        self.batch_size = batch_size
 
         self.conv_layers = nn.Sequential(
             nn.Conv1d(
@@ -60,7 +58,7 @@ class DancerModel(nn.Module):
         cnn_inputs = batch_inputs.view(-1, config.channels, config.buffer_size)
         cnn_outputs = self.conv_layers(cnn_inputs)
 
-        cnn_outputs = cnn_outputs.view(batch_inputs.shape[0], config.sequence_size, -1)
+        cnn_outputs = cnn_outputs.view(batch_inputs.shape[0], batch_inputs.shape[1], -1)
 
         x, _ = self.rnn(cnn_outputs)
 

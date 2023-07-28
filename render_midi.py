@@ -244,7 +244,9 @@ else:
                 songname = song[0:-4]
                 outpath = args.out_path + '/' + artist + '/' + songname + '/'
 
-                generate_song(midifile, outpath, [soundfonts[processed_count % len(soundfonts)]])
+                soundfont = soundfonts[processed_count % len(soundfonts)]
+
+                generate_song(midifile, outpath, [soundfont])
                 
                 processed_count += 1
 
