@@ -26,8 +26,8 @@ parser.add_argument('--low-pass-chance', type=float, default=0.5, help='chance t
 parser.add_argument('--min-volume', type=float, default=1, help='will choose random gain between this and --max-volume')
 parser.add_argument('--max-volume', type=float, default=2, help='will choose random gain between --min-volume and this')
 
-parser.add_argument('--max-noise', type=float, default=0.05, help='will choose random low pass between this and 1')
-parser.add_argument('--noise-chance', type=float, default=0.5, help='chance to apply noise')
+parser.add_argument('--max-noise', type=float, default=0.1, help='will choose random low pass between this and 1')
+parser.add_argument('--noise-chance', type=float, default=0.75, help='chance to apply noise')
 
 parser.add_argument('--max-overdrive', type=float, default=0, help='will choose random low pass between this and 1')
 parser.add_argument('--overdrive-chance', type=float, default=0.5, help='chance to apply overdrive')
@@ -136,7 +136,9 @@ for artist in os.listdir(args.in_path):
                     else: 
                         volume = args.min_volume + random.random() * (args.max_volume - args.min_volume)
 
-                        prenoise_af = f'atempo={pitch}'
+                        newrate = args.sample_rate * pitch
+
+                        prenoise_af = f'asetrate={newrate},aresample={args.sample_rate},asetpts=N/SR/TB'
                         prenoise_af += f',atrim=start={start}:end={start + chunk_length}'
 
                         postnoise_af = f'volume={volume}'
@@ -154,8 +156,8 @@ for artist in os.listdir(args.in_path):
                             compress_mix = 0.0 + 0.1 * random.random() * args.max_overdrive
                             prenoise_af += f',acompressor=level_in={compress_level_in}:threshold={compress_threshold}:ratio={compress_ratio}:mix={compress_mix}:attack=0.1:release=0.1'
 
-                        noise = random.random() ** 2 * args.max_noise
-                        if args.noise_chance < random.random():
+                        noise = random.random() * args.max_noise
+                        if args.noise_chance > random.random():
                             noise = 0
 
                         fc = f'[0:a]{prenoise_af}[musik];[1:a]volume={noise}[noise];[musik][noise]amix=inputs=2[master];[master]{postnoise_af}[aout]'
@@ -164,14 +166,13 @@ for artist in os.listdir(args.in_path):
                         ffmpeg_args += ['-v', 'warning'] 
                         ffmpeg_args += ['-n'] # no overwrite 
                         ffmpeg_args += ['-i', infile] 
-                        ffmpeg_args += ['-f', 'lavfi'] 
-                        ffmpeg_args += ['-i', f'anoisesrc=d={chunk_length}:c=pink:r={args.sample_rate}']
+                        ffmpeg_args += ['-f', 'lavfi', '-i', f'anoisesrc=d={chunk_length}:c=pink:r={args.sample_rate}']
                         ffmpeg_args += ['-filter_complex', fc]
                         ffmpeg_args += ['-map', '[aout]']
                         ffmpeg_args += ['-ss', str(start)]
                         ffmpeg_args += ['-t', str(chunk_length)]
                         ffmpeg_args += ['-c:a', 'libvorbis']
-                        ffmpeg_args += ['-qscale:a', '2']
+                        ffmpeg_args += ['-qscale:a', '6']
                         ffmpeg_args += ['-ar', str(args.sample_rate)]
                         ffmpeg_args += [outfile + '.ogg']
 
@@ -190,4 +191,3 @@ for thread in threads:
     thread.join()
 
 print('Done. Created', chunk_count, 'chunks.')
-

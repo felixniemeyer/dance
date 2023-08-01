@@ -53,7 +53,7 @@ class DancerModel(nn.Module):
         )
 
         self.output = nn.Linear(8, 2)  # snare and kick
-
+drive
     def forward(self, batch_inputs):  # takes a batch of sequences
         cnn_inputs = batch_inputs.view(-1, config.channels, config.buffer_size)
         cnn_outputs = self.conv_layers(cnn_inputs)

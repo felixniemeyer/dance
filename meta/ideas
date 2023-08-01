@@ -1,6 +1,23 @@
+Training
+
+- D: Use Pytorch for defining the model and training
+- Try different architectures programmatically
+  - cnn layers, features
+  - rnn layers and size
+  - training parameters
+  - each to 20 epochs
+  - then compare the 5 best in depth 
+- Convert to ONNX 
+- Use it in the browser with onnxruntime-web
+
 Ground Truth
 
-- Use data created from MIDI files for training
+- Use data from Nighthawks annotated manually for fine tuning
+
+- D: Damn! the ffmpeg speed filter I am using does not pitch down at the moment
+  - D: Need to use samplerate instead
+
+- D: Use data created from MIDI files for training
   - Keep the specific notes and programs (general MIDI sound set) variable
     - For a start
       - kick and 
@@ -8,23 +25,14 @@ Ground Truth
       - (flash can be overall FFT engergy or so) 
   - x2 by using different sound fonts
 
-- Use data from Nighthawks annotated manually for fine tuning
-
-- In both cases: 
+- D(more or less): In both cases: 
   - x5 by pitching up and down 2x
   - x3 by adding reverb
   - x3 by adding noise
     - white noise
     - some noise
 
-- Cut out 10s pieces
+- D: Cut out 10s pieces
   - sometimes combine one song with another
   - audio and kicks.txt and snare.txt
-
-Training
-
-- Use Pytorch for defining the model and training
-- Convert to ONNX 
-- Use it in the browser with onnxruntime-web
-
 
