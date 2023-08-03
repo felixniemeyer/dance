@@ -6,6 +6,20 @@ from torch.utils.data import Dataset
 
 import config
 
+import matplotlib.pyplot as plt
+
+kick_half_life = 0.1 # seconds
+snare_half_life = 0.1 # seconds
+
+# 44100 / 512 times per second a f is multiplied
+# k ** (half_life * 44100 / 512) = 0.5
+# k = 0.5 ** (512 / (half_life * 44100))
+
+kick_f = 0.5 ** (config.buffer_size / (kick_half_life * config.sample_rate))
+snare_f = 0.5 ** (config.buffer_size / (snare_half_life * config.sample_rate))
+
+print("kick_f", kick_f)
+print("snare_f", snare_f)
 
 class DanceDataset(Dataset):
     def __init__(self, path, max_size = None):
@@ -41,6 +55,11 @@ class DanceDataset(Dataset):
         assert samplerate == config.sample_rate, "sample rate mismatch"
         assert audio.shape[0] == config.channels, "channel mismatch"
 
+        sequence_size = audio.shape[1] // config.buffer_size
+        assert sequence_size > 0, "audio too short"
+    
+        offset = audio.shape[1] % config.buffer_size
+
         kicks = []
         with open(kicksfile, 'r') as file:
             for line in file:
@@ -50,30 +69,34 @@ class DanceDataset(Dataset):
             for line in file:
                 snares.append(float(line) * samplerate)
 
-        def time_to_samples(time):
-            return int(time * samplerate)
-
         sequence_in = []
         sequence_out = []
         kicks_index = 0
         snares_index = 0
 
-        for i in range(0, config.sequence_size):
-            start = config.sequence_offset + i * config.buffer_size
+        buffer_has_kick = 0
+        buffer_has_snare = 0 
+
+        for i in range(0, sequence_size):
+            start = offset + i * config.buffer_size
             exclusive_end = start + config.buffer_size
             sequence_in.append(torch.stack([
                 audio[0][start: exclusive_end],
                 audio[1][start: exclusive_end]
             ]))
 
-            buffer_has_kick = 0
+            buffer_has_kick *= kick_f
             while kicks_index < len(kicks) and kicks[kicks_index] < exclusive_end:
                 buffer_has_kick = 1.
                 kicks_index += 1
-            buffer_has_snare = False
+            buffer_has_snare *= snare_f
             while snares_index < len(snares) and snares[snares_index] < exclusive_end:
                 buffer_has_snare = 1.
                 snares_index += 1
             sequence_out.append([buffer_has_kick, buffer_has_snare])
+
+        # plot the labels
+        # plt.plot(sequence_out)
+        # plt.show()
 
         return torch.stack(sequence_in), torch.tensor(sequence_out)

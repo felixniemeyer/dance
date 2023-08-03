@@ -1,3 +1,5 @@
+import os 
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -19,13 +21,14 @@ parser.add_argument("-o", "--save_to", type=str, default=None, help="path to sav
 parser.add_argument("-e", "--num_epochs", type=int, default=10, help="number of epochs to train for")
 parser.add_argument("-r", "--learning_rate", type=float, default=1e-3, help="learning rate")
 parser.add_argument("-b", "--batch_size", type=int, default=16, help="batch size")
+parser.add_argument("-m", "--max_size", type=int, default=None, help="truncate dataset to this size")
 
 args = parser.parse_args()
 
 batch_size = args.batch_size
 
 # Assuming you have prepared your dataset and DataLoader
-dataset = DanceDataset("./chunks")
+dataset = DanceDataset("./chunks", max_size=args.max_size)
 print('dataset size: ', len(dataset))
 print()
 
@@ -57,7 +60,7 @@ if args.continue_from is not None:
 last_epoch = first_epoch + args.num_epochs
 
 # Define loss function and optimizer
-criterion = nn.CrossEntropyLoss()
+criterion = nn.L1Loss()
 
 # Training loop
 for epoch in range(first_epoch, last_epoch):
@@ -65,7 +68,7 @@ for epoch in range(first_epoch, last_epoch):
     model.train()  # Set the model to training mode
     print('training') 
     for i, (batch_inputs, batch_labels) in enumerate(train_loader):
-        print('\rbatch', i + 1, 'of', train_size // batch_size, end='\r', flush=True)
+        print('\rbatch', i + 1, 'of', (train_size - 1) // batch_size + 1, end='\r', flush=True)
         # print('shape', batch_inputs.shape, batch_labels.shape)
         batch_inputs, batch_labels = batch_inputs.to(device), batch_labels.to(device)
 
@@ -87,30 +90,33 @@ for epoch in range(first_epoch, last_epoch):
     model.eval()  # Set the model to evaluation mode
     print('evaluation')
     with torch.no_grad():
-        total_correct = 0
+        total_loss = 0
         total_samples = 0
         for i, (val_inputs, val_labels) in enumerate(val_loader):
-            print('\rbatch', i + 1, 'of', val_size // batch_size, end='\r', flush=True)
+            print('\rbatch', i + 1, 'of', (val_size - 1) // batch_size + 1, end='\r', flush=True)
             val_inputs, val_labels = val_inputs.to(device), val_labels.to(device)
 
             # Forward pass
             val_outputs = model(val_inputs)
-            val_outputs = torch.where(val_outputs > 0.5, 1, 0)
 
-            correct = torch.eq(val_outputs, val_labels)
+            # Compute the loss
+            loss = criterion(val_outputs, val_labels)
 
-            both_correct = torch.logical_and(correct[:,:,0], correct[:,:,1])
-             
-            total_correct += torch.sum(both_correct)
-            total_samples += batch_size * config.sequence_size
+            # Compute accuracy
+            total_loss += loss.item() * val_inputs.size(0)
+            total_samples += val_inputs.size(0)
             
-        accuracy = total_correct / total_samples
-        print(f"Validation accuracy: {accuracy:.4f}")
-    print()
+        loss = total_loss / total_samples
+        print()
+        print(f"Validation loss: {loss:.4f}\n")
 
 # save checkpoint
 if args.save_to is None:
     args.save_to = f"checkpoint-{last_epoch}.pt"
+else: 
+    # make path to file 
+    os.makedirs(os.path.dirname(args.save_to), exist_ok=True)
+
 print('saving model to', args.save_to)
 torch.save({
     'model_state_dict': model.state_dict(),
