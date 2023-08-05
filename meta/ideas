@@ -1,4 +1,8 @@
+Application in the Browser
+
 Training
+
+- D: Exit when change in loss < threshold
 
 - D: Use Pytorch for defining the model and training
 - Try different architectures programmatically

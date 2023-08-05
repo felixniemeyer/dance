@@ -23,6 +23,8 @@ parser.add_argument("-r", "--learning_rate", type=float, default=1e-3, help="lea
 parser.add_argument("-b", "--batch_size", type=int, default=16, help="batch size")
 parser.add_argument("-m", "--max_size", type=int, default=None, help="truncate dataset to this size")
 
+parser.add_argument("-s", "--early_stop_threshold", type=float, default=0.02, help="when sum of loss deltas among 3 epochs falls below this threshold, stop early")
+
 args = parser.parse_args()
 
 batch_size = args.batch_size
@@ -61,6 +63,10 @@ last_epoch = first_epoch + args.num_epochs
 
 # Define loss function and optimizer
 criterion = nn.L1Loss()
+
+loss_m2 = 1
+loss_m1 = 1
+loss = 1
 
 # Training loop
 for epoch in range(first_epoch, last_epoch):
@@ -106,9 +112,20 @@ for epoch in range(first_epoch, last_epoch):
             total_loss += loss.item() * val_inputs.size(0)
             total_samples += val_inputs.size(0)
             
+        loss_m2 = loss_m1
+        loss_m1 = loss
         loss = total_loss / total_samples
         print()
         print(f"Validation loss: {loss:.4f}\n")
+
+    loss_delta = abs(loss_m2 - loss_m1)
+    loss_delta += abs(loss_m1 - loss)
+    loss_delta += abs(loss - loss_m2)
+
+    if loss_delta < args.early_stop_threshold:
+        print('early stopping\nabs loss triangle delta', loss_delta, '<', args.early_stop_threshold)
+        break
+
 
 # save checkpoint
 if args.save_to is None:

@@ -13,42 +13,46 @@ class DancerModel(nn.Module):
     def __init__(self):
         super(DancerModel, self).__init__()
 
+        first_layer_feature_size = 8
+
         self.conv_layers = nn.Sequential(
             nn.Conv1d(
                 in_channels=2,
-                out_channels=4,
+                out_channels=first_layer_feature_size,
                 kernel_size=3,
                 padding=1,
             ),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.3),
             nn.AvgPool1d(
                 kernel_size=4,
                 stride=4,
             ),
             nn.Conv1d(
-                in_channels=4,
-                out_channels=8,
+                in_channels=first_layer_feature_size,
+                out_channels=first_layer_feature_size * 2,
                 kernel_size=3,
                 padding=1,
             ),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.3),
             nn.AvgPool1d(
                 kernel_size=4,
                 stride=4,
             ),
         )
 
+        rnn_hidden_size = 64 
+
         self.rnn = nn.RNN(
-            input_size=config.buffer_size * 8 // 16,  # buffer_size // cnn downsample * num_channels
-            hidden_size=32,
-            num_layers=2,
+            input_size=config.buffer_size * first_layer_feature_size * 2 // 16,  # buffer_size // cnn downsample * num_channels
+            hidden_size=rnn_hidden_size,
+            num_layers=3,
             batch_first=True,
         )
 
         self.fc_layers = nn.Sequential(
-            nn.Linear(32, 8),
+            nn.Linear(rnn_hidden_size, 8),
             nn.ReLU(),
         )
 

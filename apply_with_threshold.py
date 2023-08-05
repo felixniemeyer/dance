@@ -27,8 +27,8 @@ else:
     print('unsupported audio format') 
     exit()
 
-kicksfile = filebase + '.kick_presence'
-snaresfile = filebase + '.snare_presence'
+kicksfile = filebase + '.kicks'
+snaresfile = filebase + '.snares'
 
 audio, samplerate = torchaudio.load(args.input)
 
@@ -54,26 +54,40 @@ model.load_state_dict(checkpoint['model_state_dict'])
 kicks = []
 snares = []
 
+# feed the rnn one buffer at a time
 print('analyzing audio file...')
-with open(kicksfile, 'w') as kf, open(snaresfile, 'w') as sf:
-    for i in range(buffers_in_file):
-        start = offset + i * config.buffer_size
-        end = start + config.buffer_size
-        buffer = audio[:, start:end]
+for i in range(buffers_in_file):
+    start = offset + i * config.buffer_size
+    end = start + config.buffer_size
+    buffer = audio[:, start:end]
 
-        sequence = buffer.unsqueeze(0)
-        batch = sequence.unsqueeze(0)
+    sequence = buffer.unsqueeze(0)
+    batch = sequence.unsqueeze(0)
 
-        model_input = batch.to(device)
+    model_input = batch.to(device)
 
-        output = model(model_input)[0][0]
+    output = model(model_input)[0][0] 
 
-        # find the index of the highest value in the output vector
+    # find the index of the highest value in the output vector
 
-        kf.write(str(output[0].item()) + '\n')
-        sf.write(str(output[1].item()) + '\n')
+    t = (i + 0.5) * buffer_duration
+    if output[0] > 0.8:
+        kicks.append(t)
+    if output[1] > 0.8:
+        snares.append(t)
 
-        if i % 100 == 0:
-            print(f"\r{i}/{buffers_in_file} ({i/buffers_in_file*100:.2f}%)", end="\r")
+    if i % 100 == 0:
+        print(f"\r{i}/{buffers_in_file} ({i/buffers_in_file*100:.2f}%)", end="\r")
 
 print(f'{buffers_in_file}/{buffers_in_file} (100.00%), done.')
+
+print(kicksfile)
+# write relevant kicks and snares to file
+with open(kicksfile, 'w') as f:
+    for kick in kicks:
+        f.write(str(kick) + '\n')
+
+with open(snaresfile, 'w') as f:
+    for snare in snares:
+        f.write(str(snare) + '\n')
+
