@@ -56,7 +56,7 @@ class DanceDataset(Dataset):
         assert audio.shape[0] == config.channels, "channel mismatch"
 
         sequence_size = audio.shape[1] // config.buffer_size
-        assert sequence_size > 0, "audio too short"
+        assert sequence_size > config.teacher_forcing_size, "audio too short: " + sequence_size + " buffers"
     
         offset = audio.shape[1] % config.buffer_size
 

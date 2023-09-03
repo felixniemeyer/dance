@@ -1,4 +1,5 @@
 import os 
+import time
 
 import torch
 import torch.nn as nn
@@ -68,11 +69,14 @@ loss_m2 = 1
 loss_m1 = 1
 loss = 1
 
+tfs = config.teacher_forcing_size
+
 # Training loop
 for epoch in range(first_epoch, last_epoch):
     print(f"Epoch {epoch+1} of {last_epoch}")
     model.train()  # Set the model to training mode
     print('training') 
+    start_time = time.time()
     for i, (batch_inputs, batch_labels) in enumerate(train_loader):
         print('\rbatch', i + 1, 'of', (train_size - 1) // batch_size + 1, end='\r', flush=True)
         # print('shape', batch_inputs.shape, batch_labels.shape)
@@ -85,7 +89,7 @@ for epoch in range(first_epoch, last_epoch):
         outputs = model(batch_inputs)
 
         # Compute the loss
-        loss = criterion(outputs, batch_labels)
+        loss = criterion(outputs[:, tfs, :], batch_labels[:, tfs, :])
 
         # Backpropagation
         loss.backward()
@@ -116,11 +120,14 @@ for epoch in range(first_epoch, last_epoch):
         loss_m1 = loss
         loss = total_loss / total_samples
         print()
-        print(f"Validation loss: {loss:.4f}\n")
+        print(f"Validation loss: {loss:.4f}")
 
     loss_delta = abs(loss_m2 - loss_m1)
     loss_delta += abs(loss_m1 - loss)
     loss_delta += abs(loss - loss_m2)
+
+    end_time = time.time()
+    print(f"Epoch {epoch+1} took {end_time - start_time:.2f}s\n")
 
     if loss_delta < args.early_stop_threshold:
         print('early stopping\nabs loss triangle delta', loss_delta, '<', args.early_stop_threshold)
@@ -132,7 +139,9 @@ if args.save_to is None:
     args.save_to = f"checkpoint-{last_epoch}.pt"
 else: 
     # make path to file 
-    os.makedirs(os.path.dirname(args.save_to), exist_ok=True)
+    path = os.path.dirname(args.save_to)
+    if path != '': 
+        os.makedirs(path, exist_ok=True)
 
 print('saving model to', args.save_to)
 torch.save({
