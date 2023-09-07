@@ -66,3 +66,8 @@ source venv/bin/activate
 ###
 echo 'installing requirements'
 pip install -r requirements.txt
+
+###
+echo 'done setting up'
+echo 'you can now start the virtual env with `source venv/bin/activate`'
+echo 'and run the program with `python render_midi.py`'

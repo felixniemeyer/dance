@@ -2,6 +2,8 @@ import os
 import mido
 import subprocess
 
+import time
+
 import threading
 
 import argparse 
@@ -90,7 +92,10 @@ for root, dirs, files in os.walk(args.soundfont_path):
             soundfonts.append(Soundfont(name, path))
 
 
+songs_in_process = 0
+start_time = time.time()
 def generate_song(midifile, outpath, soundfonts): 
+    global songs_in_process
     try: 
         mid = mido.MidiFile(midifile)
         duration = mid.length
@@ -228,6 +233,9 @@ def generate_song(midifile, outpath, soundfonts):
                             if len(threads) >= args.max_processes:
                                 threads[0].join()
                                 threads.pop(0)
+
+                            songs_in_process += 1
+
                         except Exception as e:
                             print('Error converting to ogg', str(e))
 
@@ -268,3 +276,5 @@ else:
 # wait for all threads to finish
 for thread in threads:
     thread.join()
+
+print('Finished rendering ' + str(songs_in_process) + ' songs in ' + str(time.time() - start_time) + ' seconds')
