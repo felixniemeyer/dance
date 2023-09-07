@@ -63,7 +63,7 @@ def convert_to_ogg(file_without_extension):
             '-qscale:a', '6',
             '-ar', str(sample_rate),
             file_without_extension + ".ogg"
-        ])
+        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         # remove wav
         if return_code == 0:
             print('Deleting wav after conversion of ' + file_without_extension)
@@ -202,7 +202,7 @@ def generate_song(midifile, outpath, soundfonts):
                         '-r', str(sample_rate),
                         soundfont.path,
                         midifile,
-                    ], stderr=subprocess.DEVNULL) # muting errors
+                    ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) # muting errors
                     max_size = (duration + 10) * sample_rate * channels * bits / 8 
                     max_size += 1024 * 1024 # add 1MB to the max size
                     while p.poll() is None:
