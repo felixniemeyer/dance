@@ -8,12 +8,12 @@ import argparse
 
 import traceback
 
-parser = argparse.ArgumentParser(description='Generate songs with elements')
-parser.add_argument('--midi-path', type=str, default='lakh-midi-dataset-clean', help='path to the midi files')
+parser = argparse.ArgumentParser(description='Renders midi songs with soundfonts.')
+parser.add_argument('--midi-path', type=str, default='data/midi/lakh_clean', help='path to the directory containing midi files. The following directory structure is assumed: midi-path/<artist>/<song-name>.mid')
 parser.add_argument('--single-file', type=str, default=None, help='path to a single midi file instead of --midi-path')
 
 parser.add_argument('--soundfont-path', type=str, default='soundfonts', help='path to the soundfonts')
-parser.add_argument('--out-path', type=str, default='rendered-midi', help='path to the output directory')
+parser.add_argument('--out-path', type=str, help='path to the output directory')
 
 parser.add_argument('--sample-rate', type=int, default=44100, help='sample rate')
 parser.add_argument('--bits', type=int, default=16, help='bits')
@@ -25,6 +25,22 @@ parser.add_argument('--max-processes', type=int, default=9, help='max processes 
 
 # parse arguments
 args = parser.parse_args()
+
+if args.out_path == None:
+    if args.single_file != None:
+        # get filename
+        filename = os.path.basename(args.single_file)
+        # remove extension (unknown length after dot)
+        extension_start = filename.rfind('.')
+        if(extension_start != -1):
+            filename = filename[0:extension_start]
+        args.out_path = 'data/rendered_midi/single_songs/' + filename
+    else:
+        args.out_path = 'data/rendered_midi/' + os.path.basename(args.midi_path)
+
+# mkdir out-path if it doesn't exist
+if not os.path.exists(args.out_path):
+    os.makedirs(args.out_path, exist_ok=True)
 
 sample_rate = args.sample_rate
 bits = args.bits
@@ -40,6 +56,7 @@ def convert_to_ogg(file_without_extension):
             '-n', # no overwrite
             '-v', 'warning',
             '-i', file_without_extension + ".wav",
+            '-ac', str(channels),
             '-c:a', 'libvorbis',
             '-qscale:a', '6',
             '-ar', str(sample_rate),
@@ -61,22 +78,19 @@ class Soundfont:
         self.path = path
 
 # read all available soundfonts in the soundfonts folder
+# find all .sf2 and .sf3 files in the soundfonts folder (recursively)
 print('Loading soundfonts from ' + args.soundfont_path)
 soundfonts = []
-for i, soundfont in enumerate(os.listdir(args.soundfont_path)):
-    if soundfont[-4:] == '.sf2':
-        name = soundfont[0:-4]
-        print(str(i + 1) + ". " + name)
-        path = os.path.join(args.soundfont_path, soundfont)
-        soundfonts.append(Soundfont(name, path))
-print()
+for root, dirs, files in os.walk(args.soundfont_path):
+    for file in files:
+        if file[-4:] == '.sf2' or file[-4:] == '.sf3':
+            name = file[0:-4]
+            print(name)
+            path = os.path.join(root, file)
+            soundfonts.append(Soundfont(name, path))
 
-# mkdir out-path if it doesn't exist
-if not os.path.exists(args.out_path):
-    os.makedirs(args.out_path, exist_ok=True)
 
 def generate_song(midifile, outpath, soundfonts): 
-
     try: 
         mid = mido.MidiFile(midifile)
         duration = mid.length
@@ -225,7 +239,6 @@ if args.single_file != None:
     print('Rendering single song' + args.single_file)
     generate_song(args.single_file, args.out_path, soundfonts)
     exit(0)
-
 else: 
     print('Rendering songs from ' + args.midi_path)
     # for every song in every artist dir
