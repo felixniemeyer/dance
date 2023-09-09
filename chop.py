@@ -11,26 +11,24 @@ import threading
 import subprocess
 
 parser = argparse.ArgumentParser(description='Chop up the songs into chunkgs')
-parser.add_argument('--in-path', type=str, default='rendered-midi', help='path to the midi-to-audio-out directory')
-parser.add_argument('--out-path', type=str, default='chunks', help='path to the output directory')
+parser.add_argument('--in-path', type=str, default='data/rendered_midi/lakh_clean', help='path to the midi-to-audio-out directory')
+parser.add_argument('--out-path', type=str, help='path to the output directory')
 parser.add_argument('--chunk-length', type=int, default=16, help='length of the chunks in seconds')
 parser.add_argument('--min-pitch', type=float, default=0.79, help='will choose random pitches between this and 1')
 
 parser.add_argument('--sample-rate', type=int, default=44100, help='sample rate')
 
-parser.add_argument('--min-low-pass', type=float, default=4000, help='will choose random low pass between this and 24000')
-parser.add_argument('--max-high-pass', type=float, default=300, help='will choose random low pass between 0 and this')
-parser.add_argument('--high-pass-chance', type=float, default=0.5, help='chance to apply high pass')
-parser.add_argument('--low-pass-chance', type=float, default=0.5, help='chance to apply low pass')
+parser.add_argument('--min-low-pass', type=float, default=2000, help='will choose random low pass between this and 24000')
+parser.add_argument('--max-low-pass', type=float, default=10000, help='will choose random low pass between this and 24000')
+parser.add_argument('--max-high-pass', type=float, default=400, help='will choose random low pass between 0 and this')
+parser.add_argument('--high-pass-chance', type=float, default=0.33, help='chance to apply high pass')
+parser.add_argument('--low-pass-chance', type=float, default=0.33, help='chance to apply low pass')
 
-parser.add_argument('--min-volume', type=float, default=1, help='will choose random gain between this and --max-volume')
-parser.add_argument('--max-volume', type=float, default=2, help='will choose random gain between --min-volume and this')
+parser.add_argument('--min-volume', type=float, default=3, help='will choose random gain between this and --max-volume')
+parser.add_argument('--max-volume', type=float, default=9, help='will choose random gain between --min-volume and this')
 
-parser.add_argument('--max-noise', type=float, default=0.1, help='will choose random low pass between this and 1')
-parser.add_argument('--noise-chance', type=float, default=0.75, help='chance to apply noise')
-
-parser.add_argument('--max-overdrive', type=float, default=0, help='will choose random low pass between this and 1')
-parser.add_argument('--overdrive-chance', type=float, default=0.5, help='chance to apply overdrive')
+parser.add_argument('--max-noise', type=float, default=0.04, help='will choose random low pass between this and 1')
+parser.add_argument('--noise-chance', type=float, default=0.5, help='chance to apply noise')
 
 parser.add_argument('--dry-run', default=False, help='dry run')
 
@@ -42,6 +40,9 @@ args = parser.parse_args()
 chunk_length = args.chunk_length
 
 threads = []
+
+if args.out_path is None:
+    args.out_path = 'data/chunks/' + os.path.basename(args.in_path)
 
 # mk out-path if it doesn't exist
 if not os.path.exists(args.out_path):
@@ -69,6 +70,7 @@ def call_ffmpeg(command, outfile):
 
 chunk_count = 0
 for artist in os.listdir(args.in_path):
+    print('Artist: ', artist)
     for song in os.listdir(args.in_path + '/' + artist):
         songpath = args.in_path + '/' + artist + '/' + song + '/'
         audio_files = []
@@ -135,26 +137,20 @@ for artist in os.listdir(args.in_path):
                         os.remove(outfile + '.snares')
                     else: 
                         volume = args.min_volume + random.random() * (args.max_volume - args.min_volume)
+                        print('\t VOLUME', volume)
 
                         newrate = args.sample_rate * pitch
 
                         prenoise_af = f'asetrate={newrate},aresample={args.sample_rate},asetpts=N/SR/TB'
                         prenoise_af += f',atrim=start={start}:end={start + chunk_length}'
 
-                        postnoise_af = f'volume={volume}'
+                        postnoise_af = f'alimiter=level_in={volume}'
                         if args.low_pass_chance > random.random():
-                            lowpass = args.min_low_pass + (1 - random.random() ** 2) * (args.sample_rate / 2 - args.min_low_pass)
+                            lowpass = args.min_low_pass + random.random() * (args.max_low_pass - args.min_low_pass)
                             prenoise_af += f',lowpass=f={lowpass}'
                         if args.high_pass_chance > random.random():
                             highpass = args.max_high_pass * random.random() ** 2
                             prenoise_af += f',highpass=f={highpass}'
-
-                        if args.overdrive_chance > random.random():
-                            compress_level_in = 1 + random.random() * args.max_overdrive
-                            compress_threshold = 0.5 + 0.4 * random.random() 
-                            compress_ratio = 20
-                            compress_mix = 0.0 + 0.1 * random.random() * args.max_overdrive
-                            prenoise_af += f',acompressor=level_in={compress_level_in}:threshold={compress_threshold}:ratio={compress_ratio}:mix={compress_mix}:attack=0.1:release=0.1'
 
                         noise = random.random() * args.max_noise
                         if args.noise_chance > random.random():
