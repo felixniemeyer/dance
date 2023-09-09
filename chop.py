@@ -41,6 +41,10 @@ chunk_length = args.chunk_length
 
 threads = []
 
+# if in-path has trailing slash, remove it
+if args.in_path[-1] == '/':
+    args.in_path = args.in_path[:-1]
+
 if args.out_path is None:
     args.out_path = 'data/chunks/' + os.path.basename(args.in_path)
 
