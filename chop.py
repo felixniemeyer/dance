@@ -24,7 +24,7 @@ parser.add_argument('--sample-rate', type=int, default=44100, help='sample rate'
 
 help_text = 'will choose random pitches between this and 1'
 parser.add_argument('--min-pitch', type=float, default=0.79, help=help_text)
-parser.add_argument('--volume', type=float, default=5, help='output level before limiter')
+parser.add_argument('--volume', type=float, default=2, help='output level before limiter')
 
 parser.add_argument('--dry-run', default=False, help='dry run')
 
