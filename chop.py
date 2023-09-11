@@ -59,7 +59,7 @@ def abbreviate(string):
 def call_ffmpeg(command, outfile): 
     print(' '.join(ffmpeg_call))
     try: 
-        subprocess.check_call(command)
+        subprocess.check_call(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     except KeyboardInterrupt:
         print('\nAborting')
         exit(0)
@@ -74,6 +74,7 @@ for artist in os.listdir(args.in_path):
     print('Artist: ', artist)
     for song in os.listdir(args.in_path + '/' + artist):
         songpath = args.in_path + '/' + artist + '/' + song + '/'
+        print('Processing ', songpath)
         audio_files = []
         for file in os.listdir(songpath):
             if file[-4:] == '.ogg':
@@ -98,6 +99,9 @@ for artist in os.listdir(args.in_path):
                 song_length = len(data) # in samples
 
                 number_of_chunks = int(song_length / chunk_length * 0.66 - 1)
+                if number_of_chunks < 1:
+                    continue
+
                 # selection, we pretend chunks have length 0 and randomly select the spots where they start
                 total_sample_duration = number_of_chunks * chunk_duration * sample_rate
                 free_area = song_length - total_sample_duration
