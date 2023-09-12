@@ -12,13 +12,13 @@ import soundfile
 import threading 
 import subprocess
 
+import config
+
 parser = argparse.ArgumentParser(description='Chop up the songs into chunks.')
 
 help_text = 'path to the rendered audio. The directory structure is expected to be: <in-path>/<artist>/<song>/ and contain an .ogg along with a .kicks and .snares file for each song'
 parser.add_argument('--in-path', type=str, default='data/rendered_midi/lakh_clean', help=help_text)
 parser.add_argument('--out-path', type=str, help='path to the output directory')
-
-parser.add_argument('--chunk-duration', type=int, default=16, help='length of the chunks in seconds')
 
 parser.add_argument('--sample-rate', type=int, default=44100, help='sample rate')
 
@@ -33,7 +33,7 @@ parser.add_argument('--max-processes', type=int, default=9, help='max processes 
 # parse arguments
 args = parser.parse_args()
 
-chunk_duration = args.chunk_duration
+chunk_duration = config.chunk_duration
 chunk_length = chunk_duration * args.sample_rate
 
 threads = []

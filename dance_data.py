@@ -6,23 +6,8 @@ from torch.utils.data import Dataset
 
 import config
 
-import matplotlib.pyplot as plt
-
-kick_half_life = 0.1 # seconds
-snare_half_life = 0.1 # seconds
-
-# 44100 / 512 times per second a f is multiplied
-# k ** (half_life * 44100 / 512) = 0.5
-# k = 0.5 ** (512 / (half_life * 44100))
-
-kick_f = 0.5 ** (config.buffer_size / (kick_half_life * config.sample_rate))
-snare_f = 0.5 ** (config.buffer_size / (snare_half_life * config.sample_rate))
-
-print("kick_f", kick_f)
-print("snare_f", snare_f)
-
 class DanceDataset(Dataset):
-    def __init__(self, path, max_size = None):
+    def __init__(self, path, max_size = None, kick_half_life = 0.1, snare_half_life = 0.1):
         self.path = path
         filenames = [f[:-4] for f in os.listdir(path) if f.endswith(".ogg")]
         # check that .kicks and .snares files exist. if yes add to self.chunk_names
@@ -39,6 +24,13 @@ class DanceDataset(Dataset):
             else: 
                 print('warning: wanted', max_size, 'chunks, but only found', len(self.chunk_names))
 
+        # 44100 / 512 times per second a f is multiplied
+        # k ** (half_life * 44100 / 512) = 0.5
+        # k = 0.5 ** (512 / (half_life * 44100))
+        self.kick_f = 0.5 ** (config.buffer_size / (kick_half_life * config.sample_rate))
+        self.snare_f = 0.5 ** (config.buffer_size / (snare_half_life * config.sample_rate))
+        print("kick_f", self.kick_f)
+        print("snare_f", self.snare_f)
 
     def __len__(self):
         return len(self.chunk_names)
@@ -85,18 +77,14 @@ class DanceDataset(Dataset):
                 audio[1][start: exclusive_end]
             ]))
 
-            buffer_has_kick *= kick_f
+            buffer_has_kick *= self.kick_f
             while kicks_index < len(kicks) and kicks[kicks_index] < exclusive_end:
                 buffer_has_kick = 1.
                 kicks_index += 1
-            buffer_has_snare *= snare_f
+            buffer_has_snare *= self.snare_f
             while snares_index < len(snares) and snares[snares_index] < exclusive_end:
                 buffer_has_snare = 1.
                 snares_index += 1
             sequence_out.append([buffer_has_kick, buffer_has_snare])
-
-        # plot the labels
-        # plt.plot(sequence_out)
-        # plt.show()
 
         return torch.stack(sequence_in), torch.tensor(sequence_out)

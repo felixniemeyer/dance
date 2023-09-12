@@ -13,7 +13,7 @@ class DancerModel(nn.Module):
     def __init__(self):
         super(DancerModel, self).__init__()
 
-        first_layer_feature_size = 8
+        first_layer_feature_size = 32
 
         self.conv_layers = nn.Sequential(
             nn.Conv1d(
@@ -23,10 +23,10 @@ class DancerModel(nn.Module):
                 padding=1,
             ),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.AvgPool1d(
-                kernel_size=4,
-                stride=4,
+            nn.Dropout(0.4),
+            nn.MaxPool1d(
+                kernel_size=2,
+                stride=2,
             ),
             nn.Conv1d(
                 in_channels=first_layer_feature_size,
@@ -35,28 +35,38 @@ class DancerModel(nn.Module):
                 padding=1,
             ),
             nn.ReLU(),
-            nn.Dropout(0.3),
-            nn.AvgPool1d(
-                kernel_size=4,
-                stride=4,
+            nn.Dropout(0.4),
+            nn.MaxPool1d(
+                kernel_size=2,
+                stride=2,
+            ),
+            nn.Conv1d(
+                in_channels=first_layer_feature_size * 2,
+                out_channels=first_layer_feature_size * 2,
+                kernel_size=3,
+                padding=1,
+            ),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.MaxPool1d(
+                kernel_size=2,
+                stride=2,
             ),
         )
 
-        rnn_hidden_size = 64 
+        post_cnn_size = config.buffer_size // 8 * first_layer_feature_size * 2
+
+        rnn_hidden_size = 128
 
         self.rnn = nn.RNN(
-            input_size=config.buffer_size * first_layer_feature_size * 2 // 16,  # buffer_size // cnn downsample * num_channels
+            input_size=post_cnn_size,
             hidden_size=rnn_hidden_size,
-            num_layers=3,
+            num_layers=2,
+            dropout=0.5,
             batch_first=True,
         )
 
-        self.fc_layers = nn.Sequential(
-            nn.Linear(rnn_hidden_size, 8),
-            nn.ReLU(),
-        )
-
-        self.output = nn.Linear(8, 2)  # snare and kick
+        self.fc = nn.Linear(in_features=rnn_hidden_size, out_features=2)
 
     def forward(self, batch_inputs):  # takes a batch of sequences
         cnn_inputs = batch_inputs.view(-1, config.channels, config.buffer_size)
@@ -66,6 +76,5 @@ class DancerModel(nn.Module):
 
         x, _ = self.rnn(cnn_outputs)
 
-        x = self.fc_layers(x)
-        x = self.output(x)
+        x = self.fc(x)
         return x

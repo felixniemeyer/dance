@@ -13,24 +13,54 @@ import config
 
 import argparse
 
+import re
+
 parser = argparse.ArgumentParser()
 
-parser.add_argument("-i", "--continue_from", type=str, default=None, help="path to checkpoint to continue from")
-parser.add_argument("-o", "--save_to", type=str, default=None, help="path to save checkpoint to")
+# in
+parser.add_argument("--chunks-path", type=str, default='data/chunks/lakh_clean', help="path to chunks folder")
 
-parser.add_argument("-e", "--num_epochs", type=int, default=10, help="number of epochs to train for")
-parser.add_argument("-r", "--learning_rate", type=float, default=1e-3, help="learning rate")
-parser.add_argument("-b", "--batch_size", type=int, default=16, help="batch size")
-parser.add_argument("-m", "--max_size", type=int, default=None, help="truncate dataset to this size")
+# out
+parser.add_argument("--checkpoints-path", type=str, default='checkpoints', help="path to checkpoints folder. Structure: <checkpoints_path>/<tag>/<run>/<epoch>.pt")
+parser.add_argument("--tag", type=str, help="Tag to save checkpoint to. Current github tag will be used as default.")
+parser.add_argument("--run", type=str, default='0', help="name of the run")
+parser.add_argument("--continue-from", type=int, default=None, help="Epoch number to continue from.")
 
-parser.add_argument("-s", "--early_stop_threshold", type=float, default=0.02, help="when sum of loss deltas among 3 epochs falls below this threshold, stop early")
+# hyperparameters
+parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
+parser.add_argument("-r", "--learning-rate", type=float, default=1e-1, help="learning rate")
+parser.add_argument("-b", "--batch-size", type=int, default=16, help="batch size")
+
+# misc
+parser.add_argument("-m", "--max-size", type=int, default=None, help="truncate dataset to this size. For test runs.")
 
 args = parser.parse_args()
+
+if args.tag is None:
+    os.system('git log --decorate -n 1 > git_tag.txt')
+    with open('git_tag.txt', 'r') as f:
+        line = f.readline()
+        match = re.search(r'\(HEAD.*tag: (.*?),', line)
+        git_tag = match.group(1)
+    os.remove('git_tag.txt')
+    if git_tag == '':
+        print('Either provide tag by -t or create a git tag')
+    else:
+        print('using git tag:', git_tag)
+        args.tag = git_tag
+
+target_epoch = args.num_epochs
+if args.continue_from is not None:
+    target_epoch += args.continue_from
+
+args.save_to = f"{args.checkpoints_path}/{args.tag}/run-{args.run.zfill(3)}/{target_epoch}.pt"
+
+os.makedirs(os.path.dirname(args.save_to), exist_ok=True)
 
 batch_size = args.batch_size
 
 # Assuming you have prepared your dataset and DataLoader
-dataset = DanceDataset("./chunks", max_size=args.max_size)
+dataset = DanceDataset(args.chunks_path, max_size=args.max_size)
 print('dataset size: ', len(dataset))
 print()
 
@@ -52,12 +82,16 @@ first_epoch = 0
 optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 
 if args.continue_from is not None:
-    checkpoint = torch.load(args.continue_from)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    first_epoch = checkpoint['epoch']
-    print('loaded checkpoint from', args.continue_from)
-    print()
+    try: 
+        file = f"{args.checkpoints_path}/{args.tag}/run-{args.run.zfill(3)}/{args.continue_from}.pt"
+        checkpoint = torch.load(file)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        first_epoch = checkpoint['epoch']
+        print('loaded checkpoint from', args.continue_from)
+    except FileNotFoundError:
+        print('no checkpoint found at', args.continue_from)
+        exit()
 
 last_epoch = first_epoch + args.num_epochs
 
@@ -122,23 +156,17 @@ for epoch in range(first_epoch, last_epoch):
     loss_delta += abs(loss_m1 - loss)
     loss_delta += abs(loss - loss_m2)
 
-    if loss_delta < args.early_stop_threshold:
-        print('early stopping\nabs loss triangle delta', loss_delta, '<', args.early_stop_threshold)
-        break
-
-
-# save checkpoint
-if args.save_to is None:
-    args.save_to = f"checkpoint-{last_epoch}.pt"
-else: 
-    # make path to file 
-    os.makedirs(os.path.dirname(args.save_to), exist_ok=True)
 
 print('saving model to', args.save_to)
 torch.save({
     'model_state_dict': model.state_dict(),
     'optimizer_state_dict': optimizer.state_dict(),
     'epoch': last_epoch,
+    'hyperparameters': {
+        'learning_rate': args.learning_rate,
+        'batch_size': args.batch_size,
+        'continued_from': args.continue_from,
+    }
 }, args.save_to)
 
 print('done')

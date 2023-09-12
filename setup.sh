@@ -71,3 +71,4 @@ pip install -r requirements.txt
 echo 'done setting up'
 echo 'you can now start the virtual env with `source venv/bin/activate`'
 echo 'and run the program with `python render_midi.py`'
+echo 'for training you need to install the right version of torch'
