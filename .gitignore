@@ -1,6 +1,7 @@
-chunks/
-lakh-midi-dataset-clean/
-rendered-midi/
-soundfonts/
 venv/
 __pycache__/
+
+soundfonts/
+checkpoints/
+data/
+test/

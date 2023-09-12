@@ -1,4 +1,5 @@
 import os 
+import time
 
 import torch
 import torch.nn as nn
@@ -36,6 +37,8 @@ parser.add_argument("-m", "--max-size", type=int, default=None, help="truncate d
 
 args = parser.parse_args()
 
+tfs = config.chunk_duration * config.sample_rate // 512 // 3
+
 if args.tag is None:
     os.system('git log --decorate -n 1 > git_tag.txt')
     with open('git_tag.txt', 'r') as f:
@@ -53,14 +56,14 @@ target_epoch = args.num_epochs
 if args.continue_from is not None:
     target_epoch += args.continue_from
 
-args.save_to = f"{args.checkpoints_path}/{args.tag}/run-{args.run.zfill(3)}/{target_epoch}.pt"
+args.save_to = f"{args.checkpoints_path}/{args.tag}/run-{args.run}/{target_epoch}.pt"
 
 os.makedirs(os.path.dirname(args.save_to), exist_ok=True)
 
 batch_size = args.batch_size
 
 # Assuming you have prepared your dataset and DataLoader
-dataset = DanceDataset(args.chunks_path, max_size=args.max_size)
+dataset = DanceDataset(args.chunks_path, max_size=args.max_size, teacher_forcing_size=tfs)
 print('dataset size: ', len(dataset))
 print()
 
@@ -83,7 +86,7 @@ optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 
 if args.continue_from is not None:
     try: 
-        file = f"{args.checkpoints_path}/{args.tag}/run-{args.run.zfill(3)}/{args.continue_from}.pt"
+        file = f"{args.checkpoints_path}/{args.tag}/run-{args.run}/{args.continue_from}.pt"
         checkpoint = torch.load(file)
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -98,15 +101,12 @@ last_epoch = first_epoch + args.num_epochs
 # Define loss function and optimizer
 criterion = nn.L1Loss()
 
-loss_m2 = 1
-loss_m1 = 1
-loss = 1
-
 # Training loop
 for epoch in range(first_epoch, last_epoch):
     print(f"Epoch {epoch+1} of {last_epoch}")
     model.train()  # Set the model to training mode
     print('training') 
+    start_time = time.time()
     for i, (batch_inputs, batch_labels) in enumerate(train_loader):
         print('\rbatch', i + 1, 'of', (train_size - 1) // batch_size + 1, end='\r', flush=True)
         # print('shape', batch_inputs.shape, batch_labels.shape)
@@ -119,7 +119,7 @@ for epoch in range(first_epoch, last_epoch):
         outputs = model(batch_inputs)
 
         # Compute the loss
-        loss = criterion(outputs, batch_labels)
+        loss = criterion(outputs[:, tfs, :], batch_labels[:, tfs, :])
 
         # Backpropagation
         loss.backward()
@@ -146,16 +146,9 @@ for epoch in range(first_epoch, last_epoch):
             total_loss += loss.item() * val_inputs.size(0)
             total_samples += val_inputs.size(0)
             
-        loss_m2 = loss_m1
-        loss_m1 = loss
         loss = total_loss / total_samples
         print()
-        print(f"Validation loss: {loss:.4f}\n")
-
-    loss_delta = abs(loss_m2 - loss_m1)
-    loss_delta += abs(loss_m1 - loss)
-    loss_delta += abs(loss - loss_m2)
-
+        print(f"Validation loss: {loss:.4f}")
 
 print('saving model to', args.save_to)
 torch.save({
