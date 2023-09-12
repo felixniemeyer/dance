@@ -9,3 +9,10 @@ avoid high gpu prices while setting up
 - start with e2 instance
 - attach with / upgrade to GPU later
 
+//
+
+Avoid many files: 
+- store stuff in zip files without compression
+- keep output files organized in a structured way: 
+  - scripts take a name for the output
+
