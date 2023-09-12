@@ -7,7 +7,7 @@ from torch.utils.data import Dataset
 import config
 
 class DanceDataset(Dataset):
-    def __init__(self, path, max_size = None, kick_half_life = 0.1, snare_half_life = 0.1, teacher_forcing_size = 1):
+    def __init__(self, path, max_size = None, kick_half_life = 0.1, snare_half_life = 0.1, teacher_forcing_size = 0):
         self.path = path
         filenames = [f[:-4] for f in os.listdir(path) if f.endswith(".ogg")]
         # check that .kicks and .snares files exist. if yes add to self.chunk_names
@@ -50,7 +50,7 @@ class DanceDataset(Dataset):
         assert audio.shape[0] == config.channels, "channel mismatch"
 
         sequence_size = audio.shape[1] // config.buffer_size
-        assert sequence_size >= self.teacher_forcing_size, "audio too short: " + sequence_size + " buffers"
+        assert sequence_size > self.teacher_forcing_size, "audio too short: " + sequence_size + " buffers"
     
         offset = audio.shape[1] % config.buffer_size
 

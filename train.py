@@ -37,6 +37,7 @@ parser.add_argument("-m", "--max-size", type=int, default=None, help="truncate d
 
 args = parser.parse_args()
 
+# If tfs is set to 0, it means that the model is using its own generated output as input for all time steps, which is standard autoregressive behavior (no teacher forcing). If tfs is set to a positive value, it implies that the model uses ground truth inputs for the initial tfs time steps and then switches to its own predictions afterward (partial teacher forcing). 
 tfs = config.chunk_duration * config.sample_rate // 512 // 3
 
 if args.tag is None:
