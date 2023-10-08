@@ -120,7 +120,7 @@ for epoch in range(first_epoch, last_epoch):
         outputs = model(batch_inputs)
 
         # Compute the loss
-        loss = criterion(outputs[:, tfs, :], batch_labels[:, tfs, :])
+        loss = criterion(outputs[:, tfs:, :], batch_labels[:, tfs:, :]) # double check this
 
         # Backpropagation
         loss.backward()
