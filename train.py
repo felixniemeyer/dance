@@ -41,9 +41,9 @@ args = parser.parse_args()
 tfs = config.chunk_duration * config.sample_rate // 512 // 3
 
 if args.tag is None:
-    os.system('git log --decorate -n 1 > ~git_tag.txt')
+    os.system('git log --decorate -n 1 > .git_tag.txt~')
     try: 
-        with open('git_tag.txt', 'r') as f:
+        with open('.git_tag.txt~', 'r') as f:
             line = f.readline()
             match = re.search(r'\(HEAD.*tag: (.*?),', line)
             if match is None:
