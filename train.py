@@ -41,17 +41,20 @@ args = parser.parse_args()
 tfs = config.chunk_duration * config.sample_rate // 512 // 3
 
 if args.tag is None:
-    os.system('git log --decorate -n 1 > git_tag.txt')
-    with open('git_tag.txt', 'r') as f:
-        line = f.readline()
-        match = re.search(r'\(HEAD.*tag: (.*?),', line)
-        git_tag = match.group(1)
-    os.remove('git_tag.txt')
-    if git_tag == '':
+    os.system('git log --decorate -n 1 > ~git_tag.txt')
+    try: 
+        with open('git_tag.txt', 'r') as f:
+            line = f.readline()
+            match = re.search(r'\(HEAD.*tag: (.*?),', line)
+            if match is None:
+                raise Exception('no git tag found')
+            else: 
+                print('using git tag:', git_tag)
+                args.tag = match.group(1)
+        os.remove('~git_tag.txt')
+    except Exception as e:
+        print(e)
         print('Either provide tag by -t or create a git tag')
-    else:
-        print('using git tag:', git_tag)
-        args.tag = git_tag
 
 target_epoch = args.num_epochs
 if args.continue_from is not None:
