@@ -1,5 +1,4 @@
 # this visualizes one chunk's wav and the kicks and snare positions from the respective files
-import os
 import argparse
 
 import soundfile as sf
@@ -8,39 +7,30 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 
+from config import buffer_size, sample_rate
+
 parser = argparse.ArgumentParser(
     'audio and timestamps viewer',
-    'View a chunk of audio and its kicks and snares', 
-    'Either provide a path to a chunk (--chunk) or to a rendered midi (--rendered-midi)'
+    'View an audio file and its kicks and snares presences', 
 ) 
 
-parser.add_argument('--chunk', help='chunk to view. timestamp files are expected to be named the same as the .ogg audio file but with file endings .kicks or .snares respectively', type=str)
-parser.add_argument('--rendered-midi', help='rendered midi to view. timestamp files are expected to be in the same directory and named kicks.txt or snares.txt respectively') 
+parser.add_argument('audiofile', help='The audiofile to open. A kick_presence and snare_presence file is expected to be in the same directory', type=str)
 
 args = parser.parse_args()
 
-if args.chunk is not None:
-    # strip .ogg from chunk name if present
-    if args.chunk.endswith('.ogg'):
-        args.chunk = args.chunk[:-4]
-    audiofile = args.chunk + '.ogg'
-    kickfile = args.chunk + '.kick_presence'
-    snarefile = args.chunk + '.snare_presence'
-elif args.rendered_midi is not None:
-    audiofile = args.rendered_midi
-    # get the directory of the rendered midi
-    directory = os.path.dirname(args.rendered_midi)
-    kickfile = os.path.join(directory, 'kicks.txt')
-    snarefile = os.path.join(directory, 'snares.txt')
-else: 
-    print('No file provided. Provide either a file either with --chunk or --rendered-midi') 
-    parser.print_help()
-    exit(0)
+# strip .ogg from audiofile name if present
+if args.audiofile.endswith('.ogg'):
+    args.audiofile = args.audiofile[:-4]
+audiofile = args.audiofile + '.ogg'
+kickfile = args.audiofile + '.kick_presence'
+snarefile = args.audiofile + '.snare_presence'
 
 audio_data, samplerate = sf.read(audiofile) 
 
-if len(audio_data.shape) > 1: 
-    audio_data = audio_data[:, 0]
+assert samplerate == sample_rate, "sample rate mismatch. Project wide setting is " + str(sample_rate) + ", but file has " + str(samplerate) + " samples per second"
+
+# average all channels
+audio_data = np.mean(audio_data, axis=1)
 
 duration = len(audio_data) / samplerate
 
@@ -65,7 +55,7 @@ with open(snarefile, 'r') as file:
         snare_presence.append(float(line))
 
 # x values are spaced config.buffer_size apart
-x_values = np.arange(0, len(kick_presence)) * 512 / samplerate
+x_values = np.arange(0, len(kick_presence)) * buffer_size / samplerate
 
 # Plot kicks and snares as curves
 plt.plot(x_values, kick_presence, color='red', linewidth=0.5)

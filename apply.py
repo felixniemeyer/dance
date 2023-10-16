@@ -1,5 +1,4 @@
 import torch
-import os
 
 from dancer_model import DancerModel
 
@@ -14,12 +13,16 @@ parser = argparse.ArgumentParser()
 parser.add_argument("checkpoint", type=str, help="Checkpoint to use")
 parser.add_argument("input", type=str, help="Audio file")
 
-parser.add_argument("-b", "--batch_size", type=int, default=16, help="batch size")
+parser.add_argument("-o", "outfile_prefix", type=str, help="out file prefix. Default: input file name")
+
+parser.add_argument("-b", "--batch-size", type=int, default=16, help="batch size")
+parser.add_argument("-d", "--device-type", type=str, default="cpu", help="device type (cpu or cuda)")
 
 args = parser.parse_args()
 
 # read audio file
 audiofilename = args.input
+
 filebase = ""
 if args.input[-4:] == '.ogg': 
     filebase = args.input[:-4]
@@ -27,8 +30,11 @@ else:
     print('unsupported audio format') 
     exit()
 
-kicksfile = filebase + '.kick_presence'
-snaresfile = filebase + '.snare_presence'
+if args.outfile_prefix == None:
+    args.outfile_prefix = filebase
+
+kicksfile = args.outfile_prefix + '.kick_presence'
+snaresfile = args.outfile_prefix + '.snare_presence'
 
 audio, samplerate = torchaudio.load(args.input)
 
@@ -43,12 +49,19 @@ offset = lenght % config.buffer_size
 buffer_duration = config.buffer_size / samplerate
 
 # Initialize the model
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device(args.device_type)
 
 # Load model from disk if it exists
-model = DancerModel().to(device)
 
 checkpoint = torch.load(args.checkpoint)
+model_parameters = checkpoint['model_parameters']
+print('model parameters:', model_parameters)
+model = DancerModel(
+    first_cnn_layer_feature_size=model_parameters['first_cnn_layer_feature_size'], 
+    rnn_hidden_size=model_parameters['rnn_hidden_size'], 
+    rnn_layers=model_parameters['rnn_layers']
+).to(device)
+
 model.load_state_dict(checkpoint['model_state_dict'])
 
 kicks = []

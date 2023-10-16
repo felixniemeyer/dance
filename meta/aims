@@ -1,0 +1,30 @@
+
+#
+
+- get any results
+	- simplify model as much as possible (no dropout etc) 
+	- grid train many variations 3 episodes
+	- grid apply and grid view
+
+- grid apply script
+
+- grid view presence
+
+#
+
+- grid training until monday
+
+	- D: reduce number of combinations
+		- calculate the number of episodes that will be trained
+
+	- D: variate loss function 
+
+	- D: save and load meta params from checkpoint
+
+	- make buffer size a meta parameter
+
+	- D: allow provision of additional parameters (e.g. data size limitation for testing)
+
+	- D: name for grid run
+
+	- powernap
