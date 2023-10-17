@@ -26,6 +26,7 @@ while True:
 
     duration = len(audio_data) / samplerate
 
+    print()
     print('duration', duration)
 
     # Create time array

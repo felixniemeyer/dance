@@ -6,10 +6,12 @@
 	- grid train many variations 3 episodes
 	- grid apply and grid view
 
-- grid apply script
+- grid apply script 
 
 - grid view presence
 
+- INVESTIGATE
+	- why does the NN learn constants after just a few data points?
 #
 
 - grid training until monday

@@ -23,7 +23,7 @@ parser.add_argument("--chunks-path", type=str, default='data/chunks/lakh_clean',
 
 # out
 parser.add_argument("--checkpoints-path", type=str, default='checkpoints', help="path to checkpoints folder. Structure: <checkpoints_path>/<tag>/<epoch>.pt")
-parser.add_argument("--tag", type=str, help="Tag to save checkpoint to. Current github tag will be used as default.")
+parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Current github tag will be used as default.")
 parser.add_argument("--continue-from", type=int, default=None, help="Epoch number to continue from.")
 
 # hyperparameters
@@ -115,7 +115,7 @@ if args.continue_from is not None:
         print('ignoring model parameters and using the ones from the checkpoint')
         model_parameters = checkpoint['model_parameters']
         model = DancerModel(
-            cnn_first_layer_feature_size=model_parameters['first_cnn_layer_feature_size'],
+            cnn_first_layer_feature_size=model_parameters['cnn_first_layer_feature_size'],
             cnn_activation_function=model_parameters['cnn_activation_function'],
             cnn_layers=model_parameters['cnn_layers'],
             cnn_dropout=model_parameters['cnn_dropout'],
@@ -177,7 +177,6 @@ avg_loss = 0
 toal_time = 0
 epoch_count = 0
 
-
 # Training loop
 for epoch in range(first_epoch, last_epoch):
     print(f"Epoch {epoch+1} of {last_epoch}")
@@ -196,7 +195,9 @@ for epoch in range(first_epoch, last_epoch):
         outputs = model(batch_inputs)
 
         # Compute the loss
-        loss = criterion(outputs[:, tfs:, :], batch_labels[:, tfs:, :]) # double check this
+        # loss = criterion(outputs[:, tfs:, :], batch_labels[:, tfs:, :]) # Teacher Forcing
+
+        loss = criterion(outputs, batch_labels) # double check this
 
         # Backpropagation
         loss.backward()

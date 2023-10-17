@@ -17,11 +17,12 @@ class DancerModel(nn.Module):
         self.cnn_dropout = cnn_dropout
 
         layers = []
+        previous_feature_size = config.channels
         feature_size = cnn_first_layer_feature_size
         for _ in range(cnn_layers):
             layers += [
                 nn.Conv1d(
-                    in_channels=2,
+                    in_channels=previous_feature_size,
                     out_channels=feature_size,
                     kernel_size=3,
                     padding=1,
@@ -33,12 +34,13 @@ class DancerModel(nn.Module):
                     stride=2,
                 )
             ]
+            previous_feature_size = feature_size
             feature_size *= 2
 
 
         self.conv_layers = nn.Sequential(*layers)
 
-        post_cnn_size = config.buffer_size // 2 ** cnn_layers * feature_size
+        post_cnn_size = config.buffer_size // 2 ** cnn_layers * previous_feature_size
 
         self.rnn = nn.RNN(
             input_size=post_cnn_size,
@@ -70,4 +72,4 @@ class DancerModel(nn.Module):
             return nn.Sigmoid()
 
     def make_cnn_dropout_layer(self):
-        return nn.Dropout(self.dropout)
+        return nn.Dropout(self.cnn_dropout)
