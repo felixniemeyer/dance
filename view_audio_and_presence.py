@@ -8,6 +8,8 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 
+from results_plotter import ResultsPlotter
+
 from config import buffer_size, sample_rate
 
 parser = argparse.ArgumentParser(
@@ -39,30 +41,11 @@ audio_data, samplerate = sf.read(audiofile)
 
 assert samplerate == sample_rate, "sample rate mismatch. Project wide setting is " + str(sample_rate) + ", but file has " + str(samplerate) + " samples per second"
 
-
-
 # average all channels
 audio_data = np.mean(audio_data, axis=1)
 
-duration = len(audio_data) / samplerate
-
-print('samplerate', samplerate) 
-
-# Create time array
-time = np.linspace(0, duration, num=len(audio_data))
-
-fig, ax1 = plt.subplots()
-ax1.set_xlabel('Time [s]')
-ax1.set_ylabel('Waveform amplitude')
-
-# Plot WAV file
-ax1.plot(time, audio_data, color='black', linewidth=0.1)
-
-ax2 = ax1.twinx()
-ax2.set_ylabel('Audio event presence')
-
-# Plot event presences
-x_values = np.arange(0, len(audio_data) // buffer_size) * buffer_size / samplerate
+plotter = ResultsPlotter(buffer_size, samplerate)
+plotter.plot_wav(audio_data)
 
 for name, eventfile in eventfiles.items():
     event_presence = []
@@ -72,13 +55,6 @@ for name, eventfile in eventfiles.items():
             event_presence.append(float(line))
     # make random color
     color = np.random.rand(3,)
-    ax2.plot(x_values, event_presence, color=color, linewidth=0.5, label=name)
+    plotter.plot_presence(event_presence, name, color)
 
-ax2.legend()
-
-# Set labels and title
-plt.title('Chunk with kicks (red) and snares (green)')
-
-# Display the plot
-plt.show()
-
+plotter.finish()
