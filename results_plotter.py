@@ -19,9 +19,8 @@ class ResultsPlotter:
         time = np.linspace(0, self.duration, num=self.samplesize)
 
         _, ax1 = plt.subplots()
-        ax1.set_xlabel('Time [s]')
-        ax1.set_ylabel('Waveform amplitude')
-
+        # set title
+        ax1.set_title('audio waveform and audio event presence')
         ax1.plot(time, waveform, color='black', linewidth=0.1)
 
         ax1.set_xlabel('Time [s]')
@@ -29,6 +28,7 @@ class ResultsPlotter:
         ax1.legend
 
         self.ax2 = ax1.twinx()
+        self.ax2.set_ylabel('Audio event presence')
 
         print("self.samplesize", self.samplesize)
         print("buffersize", self.buffersize)
@@ -44,7 +44,5 @@ class ResultsPlotter:
 
     def finish(self): 
         self.ax2.legend()
-        plt.title('audio waveform and audio event presence')
         plt.show()
-
-
+        plt.close()

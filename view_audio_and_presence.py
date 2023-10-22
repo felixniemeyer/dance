@@ -6,8 +6,6 @@ import soundfile as sf
 
 import numpy as np
 
-import matplotlib.pyplot as plt
-
 from results_plotter import ResultsPlotter
 
 from config import buffer_size, sample_rate

@@ -39,11 +39,12 @@ snaresfile = args.outfile_prefix + '.snare_presence'
 audio, samplerate = torchaudio.load(args.input)
 
 assert samplerate == config.sample_rate, "sample rate mismatch"
-assert audio.shape[0] == config.channels, "channel mismatch"
+
+audio = audio.mean(0)
 
 print('input audio shape:', audio.shape) 
 
-lenght = audio.shape[1]
+lenght = len(audio)
 buffers_in_file = lenght // config.buffer_size
 offset = lenght % config.buffer_size
 buffer_duration = config.buffer_size / samplerate
@@ -55,7 +56,6 @@ device = torch.device(args.device_type)
 
 checkpoint = torch.load(args.checkpoint)
 model_parameters = checkpoint['model_parameters']
-print('model parameters:', model_parameters)
 model = DancerModel(
     cnn_first_layer_feature_size=model_parameters['cnn_first_layer_feature_size'],
     cnn_activation_function=model_parameters['cnn_activation_function'],
@@ -76,7 +76,7 @@ with open(kicksfile, 'w') as kf, open(snaresfile, 'w') as sf:
     for i in range(buffers_in_file):
         start = offset + i * config.buffer_size
         end = start + config.buffer_size
-        buffer = audio[:, start:end]
+        buffer = audio[start:end]
 
         sequence = buffer.unsqueeze(0)
         batch = sequence.unsqueeze(0)

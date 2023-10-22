@@ -2,9 +2,9 @@ from dance_data import DanceDataset
 from config import sample_rate, buffer_size
 import numpy as np
 
-import matplotlib.pyplot as plt
+from results_plotter import ResultsPlotter
 
-ds = DanceDataset("data/chunks/lakh_clean") 
+ds = DanceDataset("data/chunks/lakh_clean", kick_half_life=0.02, snare_half_life=0.02, print_filename=True)
 
 
 while True:
@@ -15,48 +15,27 @@ while True:
 
     # convert tensor to numpy array
     audio_data = audio_data.numpy()
-    audio_data = audio_data.reshape(-1, 2)
+    audio_data = audio_data.reshape(-1) 
+
     label = label.numpy()
 
     samplerate = sample_rate
     print('samplerate', samplerate) 
 
     # average all channels
-    audio_data = np.mean(audio_data, axis=1)
 
     duration = len(audio_data) / samplerate
 
     print()
     print('duration', duration)
 
-    # Create time array
-    time = np.linspace(0, duration, num=len(audio_data))
-
-    # Plot WAV file
-    plt.plot(time, audio_data, color='black', linewidth=0.1, label='audio')
+    plotter = ResultsPlotter(buffer_size, samplerate)
+    plotter.plot_wav(audio_data)
 
     kick_presence = label[:, 0]
     snare_presence = label[:, 1]
 
-    # x values are spaced config.buffer_size apart
-    x_values = np.arange(0, len(kick_presence)) * buffer_size / samplerate
+    plotter.plot_presence(kick_presence, 'kicks', 'red')
+    plotter.plot_presence(snare_presence, 'snares', 'green')
 
-    # Plot kicks and snares as curves
-    plt.plot(x_values, kick_presence, color='red', linewidth=0.5, label='kicks')
-    plt.plot(x_values, snare_presence, color='green', linewidth=0.5, label='snares')
-
-    plt.legend()
-
-    # Set labels and title
-    plt.xlabel('Time [s]')
-    plt.ylabel('Amplitude')
-    plt.title('Chunk with kicks (red) and snares (green)')
-
-    # Display the plot
-    plt.show()
-
-    plt.close()
-
-    # clear plt
-    plt.clf()
-
+    plotter.finish()

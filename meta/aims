@@ -1,4 +1,11 @@
 
+- go mono
+
+#
+
+- INVESTIGATE
+	- why does the NN learn constants after just a few data points?
+
 #
 
 - get any results
@@ -10,8 +17,6 @@
 
 - grid view presence
 
-- INVESTIGATE
-	- why does the NN learn constants after just a few data points?
 #
 
 - grid training until monday

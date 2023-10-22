@@ -6,7 +6,13 @@ import torch.nn as nn
 import torch.optim as optim
 
 from dance_data import DanceDataset
+
 from dancer_model import DancerModel
+
+from models.cnn_only import CNNOnly
+from models.rnn_only import RNNOnly
+from models.cnn_and_rnn import CNNAndRNN
+from models.cnn_and_rnn_and_funnel import CNNAndRNNAndFunnel
 
 from torch.utils.data import DataLoader, random_split
 
@@ -28,17 +34,19 @@ parser.add_argument("--continue-from", type=int, default=None, help="Epoch numbe
 
 # hyperparameters
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
-parser.add_argument("-r", "--learning-rate", type=float, default=1e-1, help="learning rate")
-parser.add_argument("-b", "--batch-size", type=int, default=16, help="batch size")
+parser.add_argument("-r", "--learning-rate", type=float, default=1e-2, help="learning rate")
+parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 
-parser.add_argument("--audio-event-half-life", type=float, default=0.1, help="half life of kicks and snares in seconds")
+parser.add_argument("--audio-event-half-life", type=float, default=0.02, help="half life of kicks and snares in seconds")
 
-parser.add_argument("--cnn-first-layer-feature-size", type=int, default=32, help="number of features in first layer of CNN")
-parser.add_argument("--cnn-activation-function", type=str, default='lrelu', help="activation function to use in CNN. Options: lrelu, tanh, sigmoid")
-parser.add_argument("--cnn-layers", type=int, default=3, help="number of layers in CNN")
+parser.add_argument("--model", type=int, default=8, help="number of features in first layer of CNN")
+
+parser.add_argument("--cnn-first-layer-feature-size", type=int, default=8, help="number of features in first layer of CNN")
+parser.add_argument("--cnn-activation-function", type=str, default='tanh', help="activation function to use in CNN. Options: lrelu, tanh, sigmoid")
+parser.add_argument("--cnn-layers", type=int, default=2, help="number of layers in CNN")
 parser.add_argument("--cnn-dropout", type=float, default=0, help="dropout to use in CNN")
 
-parser.add_argument("--rnn-hidden-size", type=int, default=128, help="number of hidden units in RNN")
+parser.add_argument("--rnn-hidden-size", type=int, default=64, help="number of hidden units in RNN")
 parser.add_argument("--rnn-layers", type=int, default=2, help="number of layers in RNN")
 parser.add_argument("--rnn-dropout", type=float, default=0, help="dropout to use in RNN")
 
@@ -179,8 +187,9 @@ epoch_count = 0
 
 # Training loop
 for epoch in range(first_epoch, last_epoch):
+
     print(f"Epoch {epoch+1} of {last_epoch}")
-    print('Training')
+    print('\nTraining')
     model.train()  # Set the model to training mode
     start_time = time.time()
     for i, (batch_inputs, batch_labels) in enumerate(train_loader):
@@ -196,12 +205,13 @@ for epoch in range(first_epoch, last_epoch):
 
         # Compute the loss
         # loss = criterion(outputs[:, tfs:, :], batch_labels[:, tfs:, :]) # Teacher Forcing
-
-        loss = criterion(outputs, batch_labels) # double check this
+        loss = criterion(outputs, batch_labels) 
 
         # Backpropagation
         loss.backward()
+
         optimizer.step()
+
     print()
 
     # Validation after each epoch
@@ -224,8 +234,7 @@ for epoch in range(first_epoch, last_epoch):
             total_loss += loss.item() * val_inputs.size(0)
             total_samples += val_inputs.size(0)
             
-        loss = total_loss / total_samples
-        avg_loss += loss
+        avg_loss += total_loss / total_samples
         print()
         print(f"Validation loss: {loss:.4f}")
 
@@ -234,7 +243,7 @@ for epoch in range(first_epoch, last_epoch):
     toal_time += epoch_duration
     if not args.summarize: print(f"Epoch duration: {epoch_duration:.2f} seconds")
 
-print('saving model to', args.save_to)
+print('\nSaving model to', args.save_to)
 torch.save({
     'model_state_dict': model.state_dict(),
     'optimizer_state_dict': optimizer.state_dict(),
@@ -250,8 +259,7 @@ torch.save({
 
 if args.summarize:
     exit(0)
+
 print(f"Average time per epoch: {toal_time / epoch_count:.2f} seconds")
 print(f"Average validation loss: {avg_loss / epoch_count:.4f}")
 print(f"Final validation loss: {loss:.4f}")
-
-print('done')

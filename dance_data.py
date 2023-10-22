@@ -7,8 +7,11 @@ from torch.utils.data import Dataset
 import config
 
 class DanceDataset(Dataset):
-    def __init__(self, path, max_size = None, kick_half_life = 0.1, snare_half_life = 0.1, teacher_forcing_size = 0):
+    def __init__(self, path, max_size = None, kick_half_life = 0.1, snare_half_life = 0.1, teacher_forcing_size = 0, print_filename=False
+):
         self.path = path
+        self.print_filename = print_filename        
+
         filenames = [f[:-4] for f in os.listdir(path) if f.endswith(".ogg")]
         # check that .kicks and .snares files exist. if yes add to self.chunk_names
         count = 0
@@ -44,15 +47,20 @@ class DanceDataset(Dataset):
         kicksfile = os.path.join(self.path, chunk_name + ".kicks")
         snaresfile = os.path.join(self.path, chunk_name + ".snares")
 
+        if self.print_filename:
+            print(audiofile)
+
         audio, samplerate = torchaudio.load(audiofile)
 
         assert samplerate == config.sample_rate, "sample rate mismatch"
-        assert audio.shape[0] == config.channels, "channel mismatch"
+        audio = audio.mean(0) # multichannel to mono
 
-        sequence_size = audio.shape[1] // config.buffer_size
+        audio_size = audio.shape[0]
+
+        sequence_size = audio_size // config.buffer_size
         assert sequence_size > self.teacher_forcing_size, "audio too short: " + sequence_size + " buffers"
     
-        offset = audio.shape[1] % config.buffer_size
+        offset = audio_size % config.buffer_size
 
         kicks = []
         with open(kicksfile, 'r') as file:
@@ -74,10 +82,7 @@ class DanceDataset(Dataset):
         for i in range(0, sequence_size):
             start = offset + i * config.buffer_size
             exclusive_end = start + config.buffer_size
-            sequence_in.append(torch.stack([
-                audio[0][start: exclusive_end],
-                audio[1][start: exclusive_end]
-            ]))
+            sequence_in.append(audio[start: exclusive_end])
 
             buffer_has_kick *= self.kick_f
             while kicks_index < len(kicks) and kicks[kicks_index] < exclusive_end:

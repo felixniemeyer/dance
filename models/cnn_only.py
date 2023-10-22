@@ -8,10 +8,9 @@ parser = argparse.ArgumentParser()
 
 parser.add_argument("--num_epochs", type=int, default=20)
 
-class DancerModel(nn.Module):
+class CNNOnly(nn.Module):
     def __init__(self, cnn_layers=3, cnn_first_layer_feature_size=4, cnn_activation_function='tanh', cnn_dropout=0, rnn_hidden_size=64, rnn_layers=2, rnn_dropout=0):
-        super(DancerModel, self).__init__()
-
+        super(CnnOnly, self).__init__()
         self.cnn_activation_function = cnn_activation_function
         self.cnn_dropout = cnn_dropout
 
@@ -43,33 +42,22 @@ class DancerModel(nn.Module):
 
         self.post_cnn_size = buffer_size // pool_size ** cnn_layers * previous_feature_size
 
-        print('post_cnn_size', self.post_cnn_size)
-
-        self.rnn = nn.RNN(
-            input_size=self.post_cnn_size,
-            hidden_size=rnn_hidden_size,
-            num_layers=rnn_layers,
-            dropout=rnn_dropout,
-            batch_first=True,
-        )
-
         self.finalLayer = nn.Sequential(
-            nn.Linear(in_features=rnn_hidden_size, out_features=rnn_hidden_size // 2),
-            nn.Tanh(),
+            nn.Linear(in_features=self.post_cnn_size, out_features=self.post_cnn_size // 2),
+            nn.LeakyReLU(),
             nn.Linear(in_features=rnn_hidden_size // 2, out_features=2), 
             nn.Sigmoid()
         )
 
     def forward(self, batch_inputs):  # takes a batch of sequences
+
         buffers = batch_inputs.view(-1, 1, buffer_size)
 
         cnn_outputs = self.conv_layers(buffers)
 
         cnn_outputs = cnn_outputs.view(batch_inputs.shape[0], batch_inputs.shape[1], self.post_cnn_size) # batch id, sequence id, buffer id, feature id
 
-        x, _ = self.rnn(cnn_outputs)
-
-        return self.finalLayer(x)
+        return self.finalLayer(cnn_outputs)
 
     def make_cnn_activation_layer(self):
         if self.cnn_activation_function == 'lrelu':
