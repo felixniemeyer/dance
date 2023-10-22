@@ -1,25 +1,20 @@
 import torch.nn as nn
-
-import argparse
-
 from config import buffer_size
-
-parser = argparse.ArgumentParser()
-
-parser.add_argument("--num_epochs", type=int, default=20)
 
 class RNNOnly(nn.Module):
     def __init__(self):
-        super(RnnOnly, self).__init__()
+        super(RNNOnly, self).__init__()
+        hidden_size=64
+        rnn_layers=4
 
         self.rnn = nn.RNN(
             input_size=buffer_size,
-            hidden_size=64,
-            num_layers=4,
+            hidden_size=hidden_size,
+            num_layers=rnn_layers,
         )
 
         self.lin = nn.Sequential(
-            nn.Linear(64, 2),
+            nn.Linear(hidden_size, 2),
             nn.Sigmoid()
         )
 

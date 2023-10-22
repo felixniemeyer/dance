@@ -1,16 +1,9 @@
 import torch.nn as nn
-
-import argparse
-
 from config import buffer_size
-
-parser = argparse.ArgumentParser()
-
-parser.add_argument("--num_epochs", type=int, default=20)
 
 class CNNAndRNNAndFunnel(nn.Module):
     def __init__(self):
-        super(CnnAndRnnAndFunnel, self).__init__()
+        super(CNNAndRNNAndFunnel, self).__init__()
         layers = []
         previous_feature_size = 1
         feature_size = 16
@@ -70,16 +63,10 @@ class CNNAndRNNAndFunnel(nn.Module):
             nn.Sigmoid(),
         )
 
-
     def forward(self, batch_inputs):  # takes a batch of sequences
-
         buffers = batch_inputs.view(-1, 1, buffer_size)
-
         cnn_outputs = self.conv_layers(buffers)
-
         cnn_outputs = cnn_outputs.view(batch_inputs.shape[0], batch_inputs.shape[1], self.post_cnn_size) # batch id, sequence id, buffer id, feature id
-
         x, _ = self.rnn(cnn_outputs)
-
         return self.finalLayer(x)
 
