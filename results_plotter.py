@@ -40,7 +40,7 @@ class ResultsPlotter:
         if self.ax2 is None: 
             raise Exception("You need to plot the waveform first")
 
-        self.ax2.plot(self.ax2_xvalues, presence, color=color, linewidth=0.5, label=name)
+        self.ax2.plot(self.ax2_xvalues, presence, color=color, linewidth=3, label=name)
 
     def finish(self): 
         self.ax2.legend()

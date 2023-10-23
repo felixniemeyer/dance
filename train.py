@@ -7,10 +7,7 @@ import torch.optim as optim
 
 from dance_data import DanceDataset
 
-from models.cnn_only import CNNOnly
-from models.rnn_only import RNNOnly
-from models.cnn_and_rnn import CNNAndRNN
-from models.cnn_and_rnn_and_funnel import CNNAndRNNAndFunnel
+from models.selector import getModelClass, getModels 
 
 from torch.utils.data import DataLoader, random_split
 
@@ -22,7 +19,7 @@ import re
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("model", type=str, help="model to train. Options: cnn_only, rnn_only, cnn_and_rnn, cnn_and_rnn_and_funnel")
+parser.add_argument("model", type=str, help="model to train. Options: " + ",".join(getModels()))
 
 # in
 parser.add_argument("--chunks-path", type=str, default='data/chunks/lakh_clean', help="path to chunks folder")
@@ -112,17 +109,7 @@ first_epoch = 0
 model = None
 optimizer = None
 
-if args.model == 'cnn_only':
-    model_class = CNNOnly
-elif args.model == 'rnn_only':
-    model_class = RNNOnly
-elif args.model == 'cnn_and_rnn':
-    model_class = CNNAndRNN
-elif args.model == 'cnn_and_rnn_and_funnel':
-    model_class = CNNAndRNNAndFunnel
-else:
-    raise Exception('invalid model')
-
+model_class = getModelClass(args.model)
 model = model_class().to(device)
 
 if args.continue_from is not None:
@@ -212,6 +199,7 @@ torch.save({
     'model_state_dict': model.state_dict(),
     'optimizer_state_dict': optimizer.state_dict(),
     'epoch': last_epoch,
+    'model_type': args.model,
     'hyperparameters': {
         'learning_rate': args.learning_rate,
         'batch_size': args.batch_size,
@@ -219,10 +207,7 @@ torch.save({
     }
 }, args.save_to)
 
-
-if args.summarize:
-    exit(0)
-
-print(f"Average time per epoch: {toal_time / epoch_count:.2f} seconds")
-print(f"Average validation loss: {avg_loss / epoch_count:.4f}")
+print(f"\nAverage time per epoch: {toal_time / epoch_count:.2f} seconds")
+print(f"\nAverage validation loss: {avg_loss / epoch_count:.4f}")
 print(f"Final validation loss: {loss:.4f}")
+

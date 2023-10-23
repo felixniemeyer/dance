@@ -1,4 +1,5 @@
 import os
+import time
 
 import argparse
 
@@ -39,6 +40,8 @@ if answer.lower() != 'y':
     print("Aborting.")
     exit(0)
 
+start_time = time.time()
+
 # run
 for learning_rate in learning_rates:
     for loss_function in loss_functions:
@@ -65,3 +68,5 @@ for learning_rate in learning_rates:
             # run the command
             os.system(cmd)
 
+end_time = time.time()
+print(f"Total time: {end_time - start_time} seconds")
