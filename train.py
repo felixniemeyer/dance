@@ -45,7 +45,7 @@ parser.add_argument("--summarize", action='store_true', help="don't log, show on
 args = parser.parse_args()
 
 # If tfs is set to 0, it means that the model is using its own generated output as input for all time steps, which is standard autoregressive behavior (no teacher forcing). If tfs is set to a positive value, it implies that the model uses ground truth inputs for the initial tfs time steps and then switches to its own predictions afterward (partial teacher forcing). 
-tfs = config.chunk_duration * config.sample_rate // 512 // 3
+tfs = config.chunk_duration * config.samplerate // 512 // 3
 
 if args.tag is None:
     os.system('git log --decorate -n 1 > .git_tag.txt~')
@@ -77,7 +77,7 @@ os.makedirs(os.path.dirname(args.save_to), exist_ok=True)
 batch_size = args.batch_size
 
 # Assuming you have prepared your dataset and DataLoader
-dataset = DanceDataset(args.chunks_path, max_size=args.dataset_size, teacher_forcing_size=tfs, kick_half_life=args.audio_event_half_life)
+dataset = DanceDataset(args.chunks_path, config.buffer_size, config.samplerate, max_size=args.dataset_size, teacher_forcing_size=tfs)
 print('dataset size: ', len(dataset))
 print()
 

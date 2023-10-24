@@ -38,7 +38,7 @@ snaresfile = args.outfile_prefix + '.snare_presence'
 
 audio, samplerate = torchaudio.load(args.input)
 
-assert samplerate == config.sample_rate, "sample rate mismatch"
+assert samplerate == config.samplerate, "sample rate mismatch"
 
 audio = audio.mean(0)
 

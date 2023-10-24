@@ -2,12 +2,10 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 
-from config import sample_rate, buffer_size
-
 # this plots an audio waveform and a presence array
 
 class ResultsPlotter: 
-    def __init__(self, buffersize=buffer_size, samplerate=sample_rate): 
+    def __init__(self, buffersize, samplerate): 
         self.buffersize = buffersize
         self.samplerate = samplerate
 
@@ -30,17 +28,21 @@ class ResultsPlotter:
         self.ax2 = ax1.twinx()
         self.ax2.set_ylabel('Audio event presence')
 
-        print("self.samplesize", self.samplesize)
-        print("buffersize", self.buffersize)
-        self.ax2_xvalues = np.arange(0, self.samplesize // self.buffersize) * self.buffersize / self.samplerate
+        self.buffers_per_file = self.samplesize // self.buffersize
+        self.buffer_duration = self.buffersize / self.samplerate
+        self.ax2_xvalues = np.arange(0, self.buffers_per_file) * self.buffer_duration + self.buffer_duration # shift bars to the right 
 
-        print("ax2_xvalues", self.ax2_xvalues)
-
-    def plot_presence(self, presence, name, color): 
+    def plot_events(self, intensities, name, color): 
         if self.ax2 is None: 
             raise Exception("You need to plot the waveform first")
+        
+        # combine self.ax2_xvalues and intensity into pairs for filtering
+        pairs = np.array([self.ax2_xvalues, intensities])
+        
+        # filter out all pairs where y < 0.01
+        pairs = pairs[:, pairs[1] > 0.01]
 
-        self.ax2.plot(self.ax2_xvalues, presence, color=color, linewidth=3, label=name)
+        self.ax2.bar(pairs[0], pairs[1], color=color, label=name, width=self.buffer_duration, alpha=0.5, align='edge')
 
     def finish(self): 
         self.ax2.legend()

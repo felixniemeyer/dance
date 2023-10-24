@@ -1,5 +1,4 @@
 import torch
-import os
 
 from dancer_model import DancerModel
 

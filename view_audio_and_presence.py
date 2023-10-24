@@ -8,7 +8,7 @@ import numpy as np
 
 from results_plotter import ResultsPlotter
 
-from config import buffer_size, sample_rate
+from config import buffer_size, samplerate 
 
 parser = argparse.ArgumentParser(
     'audio and timestamps viewer',
@@ -37,7 +37,7 @@ else:
 
 audio_data, samplerate = sf.read(audiofile) 
 
-assert samplerate == sample_rate, "sample rate mismatch. Project wide setting is " + str(sample_rate) + ", but file has " + str(samplerate) + " samples per second"
+assert samplerate == samplerate, "sample rate mismatch. Project wide setting is " + str(samplerate) + ", but file has " + str(samplerate) + " samples per second"
 
 # average all channels
 audio_data = np.mean(audio_data, axis=1)
@@ -53,6 +53,6 @@ for name, eventfile in eventfiles.items():
             event_presence.append(float(line))
     # make random color
     color = np.random.rand(3,)
-    plotter.plot_presence(event_presence, name, color)
+    plotter.plot_events(event_presence, name, color)
 
 plotter.finish()
