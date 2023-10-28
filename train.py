@@ -7,7 +7,7 @@ import torch.optim as optim
 
 from dance_data import DanceDataset
 
-from models.selector import getModelClass, getModels 
+from models.selector import getModelClass, loadModel, getModels, saveModel 
 
 from torch.utils.data import DataLoader, random_split
 
@@ -33,7 +33,7 @@ parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Cu
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
 parser.add_argument("-r", "--learning-rate", type=float, default=1e-2, help="learning rate")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
-parser.add_argument("-l", "--loss-function", type=str, default='mse', help="loss function to use. Options: mse, l1, smoothl1, bcew")
+parser.add_argument("-l", "--loss-function", type=str, default='bcew', help="loss function to use. Options: mse, l1, smoothl1, bcew")
 
 # audio
 parser.add_argument("--audio-event-half-life", type=float, default=0.02, help="half life of kicks and snares in seconds")
@@ -104,6 +104,8 @@ elif args.loss_function == 'bcew':
 else:
     raise Exception('invalid loss function')
 
+
+
 # Load model from disk if it exists
 first_epoch = 0
 model = None
@@ -115,13 +117,13 @@ model = model_class().to(device)
 if args.continue_from is not None:
     try: 
         file = f"{args.checkpoints_path}/{args.tag}/{args.continue_from}.pt"
-        checkpoint = torch.load(file)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        model, obj = loadModel(file)
+        model.to(device)
 
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        optimizer.load_state_dict(obj['optimizer_state_dict'])
 
-        first_epoch = checkpoint['epoch']
+        first_epoch = obj['epoch']
         print('loaded checkpoint from', args.continue_from)
     except FileNotFoundError:
         print('no checkpoint found at', args.continue_from)
@@ -195,17 +197,15 @@ for epoch in range(first_epoch, last_epoch):
     if not args.summarize: print(f"Epoch duration: {epoch_duration:.2f} seconds")
 
 print('\nSaving model to', args.save_to)
-torch.save({
-    'model_state_dict': model.state_dict(),
+saveModel(args.save_to, model, {
     'optimizer_state_dict': optimizer.state_dict(),
     'epoch': last_epoch,
-    'model_type': args.model,
     'hyperparameters': {
         'learning_rate': args.learning_rate,
         'batch_size': args.batch_size,
         'continued_from': args.continue_from,
     }
-}, args.save_to)
+})
 
 print(f"\nAverage time per epoch: {toal_time / epoch_count:.2f} seconds")
 print(f"\nAverage validation loss: {avg_loss / epoch_count:.4f}")

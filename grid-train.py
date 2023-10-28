@@ -3,6 +3,8 @@ import time
 
 import argparse
 
+from models.selector import getModels 
+
 parser = argparse.ArgumentParser("make options directly in the code for now")
 
 parser.add_argument('name', type=str) 
@@ -25,9 +27,9 @@ if not os.path.exists(logdir):
     os.makedirs(logdir)
 
 # parameter sets
-learning_rates = [0.007]
+learning_rates = [0.001, 0.01]
 loss_functions = ['mse', 'smoothl1', 'bcew']
-models = ['cnn_only', 'rnn_only', 'cnn_and_rnn', 'cnn_and_rnn_and_funnel']
+models = getModels()
 
 variation_count = len(learning_rates) * len(loss_functions) * len(models)
 
@@ -46,7 +48,7 @@ start_time = time.time()
 for learning_rate in learning_rates:
     for loss_function in loss_functions:
         for model in models:
-            variation = f"r{learning_rate}_l{loss_function}_m{model}"
+            variation = f"model-m{model}_lr-{learning_rate}_loss-{loss_function}"
 
             cmd = f"python train.py {model} "
 

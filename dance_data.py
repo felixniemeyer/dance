@@ -94,8 +94,7 @@ class DanceDataset(Dataset):
         kicks = readEventsFileIntoLabels(kicksfile, buffer_count, self.buffer_size, samplerate)
         snares = readEventsFileIntoLabels(snaresfile, buffer_count, self.buffer_size, samplerate)
 
-        # labels = torch.stack([kicks, snares], dim=1)
-        labels = torch.stack([snares, kicks], dim=1) # temp: swap kicks and snares
+        labels = torch.stack([kicks, snares], dim=1)
 
         return buffers, labels
 

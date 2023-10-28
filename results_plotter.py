@@ -32,15 +32,19 @@ class ResultsPlotter:
         self.buffer_duration = self.buffersize / self.samplerate
         self.ax2_xvalues = np.arange(0, self.buffers_per_file) * self.buffer_duration + self.buffer_duration # shift bars to the right 
 
-    def plot_events(self, intensities, name, color): 
+    def plot_events(self, intensities, name, color, threshold=0.01): 
         if self.ax2 is None: 
             raise Exception("You need to plot the waveform first")
         
         # combine self.ax2_xvalues and intensity into pairs for filtering
         pairs = np.array([self.ax2_xvalues, intensities])
         
+        print(pairs) 
+
         # filter out all pairs where y < 0.01
-        pairs = pairs[:, pairs[1] > 0.01]
+        pairs = pairs[:, pairs[1] > threshold]
+
+        print(pairs)
 
         self.ax2.bar(pairs[0], pairs[1], color=color, label=name, width=self.buffer_duration, alpha=0.5, align='edge')
 

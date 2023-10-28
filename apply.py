@@ -1,6 +1,6 @@
 import torch
 
-from models.selector import getModelClass
+from models.selector import getModelClass, loadModel
 
 import config
 
@@ -53,34 +53,8 @@ buffer_duration = config.buffer_size / samplerate
 device = torch.device(args.device_type)
 
 # Load model from disk if it exists
-
-checkpoint = torch.load(args.checkpoint)
-model_type = ''
-if "model_type" in checkpoint: 
-    model_type = checkpoint['model_type']
-else:
-    # determine model type from file name
-    if 'cnn_only' in args.checkpoint:
-        model_type = 'cnn_only'
-    elif 'rnn_only' in args.checkpoint:
-        model_type = 'rnn_only'
-    elif 'cnn_and_rnn' in args.checkpoint:
-        model_type = 'cnn_and_rnn'
-    elif 'cnn_and_rnn_and_funnel' in args.checkpoint:
-        model_type = 'cnn_and_rnn_and_funnel'
-    else:
-        print("don't know which model type to use")
-        exit()
-
-model = None
-modelClass = getModelClass(model_type)
-
-model = modelClass().to(device)
-
-model.load_state_dict(checkpoint['model_state_dict'])
-
-kicks = []
-snares = []
+model, obj = loadModel(args.checkpoint)
+model.to(device)
 
 print('analyzing audio file...')
 with open(kicksfile, 'w') as kf, open(snaresfile, 'w') as sf:
@@ -94,12 +68,12 @@ with open(kicksfile, 'w') as kf, open(snaresfile, 'w') as sf:
 
         model_input = batch.to(device)
 
-        output = model(model_input)[0][0]
+        labels = model(model_input)[0][0]
 
         # find the index of the highest value in the output vector
 
-        kf.write(str(output[0].item()) + '\n')
-        sf.write(str(output[1].item()) + '\n')
+        kf.write(str(labels[0].item()) + '\n')
+        sf.write(str(labels[1].item()) + '\n')
 
         if i % 100 == 0:
             print(f"\r{i}/{buffers_in_file} ({i/buffers_in_file*100:.2f}%)", end="\r")

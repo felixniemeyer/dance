@@ -1,3 +1,5 @@
+import torch 
+
 from .rnn_only import RNNOnly
 from .cnn_only import CNNOnly
 from .cnn_and_rnn import CNNAndRNN
@@ -13,7 +15,8 @@ models = {
     'cnn_and_rnn_and_funnel': CNNAndRNNAndFunnel,
     'big_rnn_and_funnel': BigRNNAndFunnel,
     'rnn_and_2_funnels': RNNAnd2Funnels,
-    'separate_lanes': SeparateLanes
+    'separate_lanes': SeparateLanes, 
+    'rnn_2f_dropout': RNNAnd2Funnels,
 }
 
 def getModels():
@@ -27,3 +30,25 @@ def getModelClass(name):
     for key in models.keys():
         print(key)
     raise Exception('invalid model')
+
+def loadModel(file):
+    obj = torch.load(file)
+
+    model_type = obj['model_type']
+    print('loaded checkpoint of model type', model_type)
+    modelClass = getModelClass(model_type)
+
+    model = modelClass()
+    model.load_state_dict(obj['model_state_dict']) 
+
+    return model, obj 
+
+def saveModel(file, model, obj):
+    for model_type, model_class in models.items(): 
+        if isinstance(model, model_class):
+            torch.save({
+                'model_type': model_type,
+                'model_state_dict': model.state_dict(),
+                **obj
+            }, file)
+
