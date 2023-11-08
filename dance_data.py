@@ -35,7 +35,6 @@ class DanceDataset(Dataset):
         data_path, 
         buffer_size, 
         samplerate, 
-        teacher_forcing_size = 0, 
         max_size = None, 
         print_filename=False, 
     ):
@@ -58,8 +57,6 @@ class DanceDataset(Dataset):
                 self.chunk_names = self.chunk_names[:max_size]
             else: 
                 print('warning: wanted', max_size, 'chunks, but only found', len(self.chunk_names))
-
-        self.teacher_forcing_size = teacher_forcing_size
 
     def __len__(self):
         return len(self.chunk_names)
@@ -89,7 +86,6 @@ class DanceDataset(Dataset):
         buffers = audio[:sequence_size].reshape(-1, self.buffer_size)
 
         assert buffer_count == buffers.shape[0], "sequence size mismatch"
-        assert buffer_count > self.teacher_forcing_size, f"audio too short: {buffer_count} buffers"
         
         kicks = readEventsFileIntoLabels(kicksfile, buffer_count, self.buffer_size, samplerate)
         snares = readEventsFileIntoLabels(snaresfile, buffer_count, self.buffer_size, samplerate)
