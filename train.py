@@ -27,6 +27,7 @@ parser.add_argument("--continue-from", type=int, default=None, help="Epoch numbe
 
 # out
 parser.add_argument("--checkpoints-path", type=str, default='checkpoints', help="path to checkpoints folder. Structure: <checkpoints_path>/<tag>/<epoch>.pt")
+parser.add_argument("-ci", "--checkpoint-interval", type=int, default=1, help="save checkpoint every n epochs")
 parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Current github tag will be used as default.")
 
 # hyperparameters
@@ -69,9 +70,9 @@ target_epoch = args.num_epochs
 if args.continue_from is not None:
     target_epoch += args.continue_from
 
-args.save_to = f"{args.checkpoints_path}/{args.tag}/{target_epoch}.pt"
+save_path = f"{args.checkpoints_path}/{args.tag}/"
 
-os.makedirs(os.path.dirname(args.save_to), exist_ok=True)
+os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
 batch_size = args.batch_size
 
@@ -119,9 +120,32 @@ else:
 
 last_epoch = first_epoch + args.num_epochs
 
-criterion = nn.CrossEntropyLoss()
+class CustomLoss(nn.Module):
+    def __init__(self, relative_offset):
+        super(CustomLoss, self).__init__()
+        self.relative_offset = relative_offset
+        self.criterion = nn.CrossEntropyLoss()
 
-loss = 0
+    def forward(self, full_predictions, full_labels):
+        tfs = int(full_labels.shape[1] * self.relative_offset)
+        predictions = full_predictions[:, tfs:, :]
+        labels = full_labels[:, tfs:, :]
+
+        # Define weights based on the condition where at least one output is 1
+        # weights = torch.where(torch.logical_or(y_true == 1, y_pred == 1), torch.tensor(10.0), torch.tensor(1))
+
+        # weights = (max of elements of last dimension) * 9 + 1
+        weights = torch.max(labels, dim=2)[0] * 9 + 1
+        
+        # Apply weights to the binary cross-entropy loss for each output dimension
+        loss_1 = nn.functional.binary_cross_entropy(predictions[:, :, 0], labels[:, :, 0], weight=weights)
+        loss_2 = nn.functional.binary_cross_entropy(predictions[:, :, 1], labels[:, :, 1], weight=weights) 
+        
+        # Return the mean loss
+        return (loss_1 + loss_2) / 2.0  # You can adjust this based on your preference
+
+criterion = CustomLoss(0.2)
+
 avg_loss = 0
 toal_time = 0
 
@@ -131,6 +155,7 @@ backpropagation_time = 0
 start_calc = 0
 to_device_time = 0
 
+loss = None
 
 # Training loop
 for epoch in range(first_epoch, last_epoch):
@@ -159,16 +184,12 @@ for epoch in range(first_epoch, last_epoch):
 
         # Compute the loss
         start_calc = time.time()
-        # teacher forcing: ignore outputs in the beginning of the sequence
-        tfs = int(batch_inputs.shape[1] * relative_offset)
-        kick_loss = criterion(outputs[:, tfs:, 0], batch_labels[:, tfs:, 0]) 
-        snare_loss = criterion(outputs[:, tfs:, 1], batch_labels[:, tfs:, 1])
-        combined_loss = kick_loss + snare_loss
+        loss = criterion(outputs, batch_labels)
         loss_calc_time += time.time() - start_calc
 
         # Backpropagation
         start_calc = time.time()
-        combined_loss.backward()
+        loss.backward()
         backpropagation_time = time.time() - start_calc
 
         optimizer.step()
@@ -193,13 +214,10 @@ for epoch in range(first_epoch, last_epoch):
             val_outputs, _ = model(val_inputs)
 
             # Compute the loss
-            tfs = int(val_inputs.shape[1] * relative_offset)
-            kick_loss = criterion(val_outputs[:, tfs:, 0], val_labels[:, tfs:, 0])
-            snare_loss = criterion(val_outputs[:, tfs:, 1], val_labels[:, tfs:, 1])
-            combined_loss = kick_loss + snare_loss
+            loss = criterion(val_outputs, val_labels)
 
             # Compute accuracy
-            total_loss += combined_loss
+            total_loss += loss
             total_batches += 1
             
         avg_loss += total_loss / total_batches
@@ -210,16 +228,19 @@ for epoch in range(first_epoch, last_epoch):
     toal_time += epoch_duration
     if not args.summarize: print(f"Epoch duration: {epoch_duration:.2f} seconds")
 
-print('\nSaving model to', args.save_to)
-saveModel(args.save_to, model, {
-    'optimizer_state_dict': optimizer.state_dict(),
-    'epoch': last_epoch,
-    'hyperparameters': {
-        'learning_rate': args.learning_rate,
-        'batch_size': args.batch_size,
-        'continued_from': args.continue_from,
-    }
-})
+    epoch_1 = epoch + 1
+    if (args.checkpoint_interval != None and (epoch - first_epoch) % args.checkpoint_interval == 0) or epoch_1 == last_epoch: 
+        file_path = f"{save_path}{epoch_1}.pt"
+        print('\nSaving model to', file_path)
+        saveModel(file_path, model, {
+            'optimizer_state_dict': optimizer.state_dict(),
+            'epoch': epoch + 1,
+            'hyperparameters': {
+                'learning_rate': args.learning_rate,
+                'batch_size': args.batch_size,
+                'continued_from': args.continue_from,
+            }
+        })
 
 print(f"\nTotal training time: {toal_time:.2f} seconds")
 print(f"Total forward pass time: {forward_time:.2f} seconds ({forward_time / toal_time * 100:.2f}%)")
