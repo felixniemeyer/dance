@@ -19,7 +19,7 @@ class V2(nn.Module):
 
         hidden_size=64
         rnn_layers=4
-        self.lstms = nn.LSTM(
+        self.lstm = nn.LSTM(
             input_size=self.interface_size, 
             hidden_size=hidden_size, 
             num_layers=rnn_layers, 
@@ -32,7 +32,7 @@ class V2(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, batch_inputs):  # takes a batch of sequences
+    def forward(self, batch_inputs, state = None):  # takes a batch of sequences
         batch_size, seq_len, buffer_size = batch_inputs.size()
 
 
@@ -42,9 +42,13 @@ class V2(nn.Module):
 
         reshaped_for_rnn = cnn_output.view(batch_size, seq_len, self.interface_size)
 
-        lstm_output, _ = self.lstms(reshaped_for_rnn)
+        new_state = None
+        if(state is None): 
+            lstm_output, new_state = self.lstm(reshaped_for_rnn)
+        else: 
+            lstm_output, new_state = self.lstm(reshaped_for_rnn, state)
 
         output = self.dense(lstm_output)
 
-        return output
+        return output, new_state
 

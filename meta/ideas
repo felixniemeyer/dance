@@ -1,5 +1,11 @@
 Application in the Browser
 
+
+
+- when training save model every x epochs
+- weight buffers with events higher than others
+- observe how it decreases to 0
+
 Optimizing training etc: 
 - Maybe I need shorter chunks (like 8s or 4s) 
 

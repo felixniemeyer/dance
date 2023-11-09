@@ -29,6 +29,8 @@ while True:
     plotter.plot_events(labels[:, 0], 'groundtruth kicks', 'red')
     plotter.plot_events(labels[:, 1], 'groundtruth snares', 'green')
 
+    state = None
+
     for checkpoint in args.checkpoints:
         model, obj = loadModel(checkpoint)
         model.to(args.device_type)
@@ -39,9 +41,9 @@ while True:
             sequence = buffer.unsqueeze(0)
             batch = sequence.unsqueeze(0)
 
-            labels = model(batch)[0][0]
-            kicks.append(labels[0].item())
-            snares.append(labels[1].item())
+            labels, state = model(batch, state)
+            kicks.append(labels[0][0][0].item())
+            snares.append(labels[0][0][1].item())
 
         color = np.random.rand(3,)
         color = color / (1 + color.mean())

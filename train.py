@@ -124,7 +124,6 @@ criterion = nn.CrossEntropyLoss()
 loss = 0
 avg_loss = 0
 toal_time = 0
-epoch_count = 0
 
 forward_time = 0
 loss_calc_time = 0
@@ -152,12 +151,11 @@ for epoch in range(first_epoch, last_epoch):
 
         # Forward pass
         start_calc = time.time()
-        outputs = model(batch_inputs)
+        outputs, _ = model(batch_inputs)
         forward_time += time.time() - start_calc
 
         # Zero out the gradients
         optimizer.zero_grad()
-
 
         # Compute the loss
         start_calc = time.time()
@@ -192,7 +190,7 @@ for epoch in range(first_epoch, last_epoch):
             val_inputs, val_labels = val_inputs.to(device), val_labels.to(device)
 
             # Forward pass
-            val_outputs = model(val_inputs)
+            val_outputs, _ = model(val_inputs)
 
             # Compute the loss
             tfs = int(val_inputs.shape[1] * relative_offset)
@@ -208,7 +206,6 @@ for epoch in range(first_epoch, last_epoch):
         print()
         print(f"Validation loss: {loss:.4f}")
 
-    epoch_count += 1
     epoch_duration = time.time() - start_time
     toal_time += epoch_duration
     if not args.summarize: print(f"Epoch duration: {epoch_duration:.2f} seconds")
@@ -230,6 +227,7 @@ print(f"Total loss calculation time: {loss_calc_time:.2f} seconds ({loss_calc_ti
 print(f"Total backpropagation time: {backpropagation_time:.2f} seconds ({backpropagation_time / toal_time * 100:.2f}%)")
 print(f"Total to device time: {to_device_time:.2f} seconds ({to_device_time / toal_time * 100:.2f}%)")
 
+epoch_count = last_epoch - first_epoch
 print(f"\nAverage time per epoch: {toal_time / epoch_count:.2f} seconds")
 print(f"\nAverage validation loss: {avg_loss / epoch_count:.4f}")
 print(f"Final validation loss: {loss:.4f}")
