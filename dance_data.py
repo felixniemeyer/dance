@@ -34,12 +34,9 @@ class DanceDataset(Dataset):
         self, 
         data_path, 
         buffer_size, 
-        samplerate, 
-        max_size = None, 
-        print_filename=False, 
+        samplerate
     ):
         self.path = data_path
-        self.print_filename = print_filename        
         self.buffer_size = buffer_size
         self.samplerate = samplerate
 
@@ -52,12 +49,6 @@ class DanceDataset(Dataset):
                 self.chunk_names.append(filename)
                 count += 1
 
-        if max_size is not None: 
-            if max_size < len(self.chunk_names):
-                self.chunk_names = self.chunk_names[:max_size]
-            else: 
-                print('warning: wanted', max_size, 'chunks, but only found', len(self.chunk_names))
-
     def __len__(self):
         return len(self.chunk_names)
 
@@ -67,9 +58,6 @@ class DanceDataset(Dataset):
         audiofile = os.path.join(self.path, chunk_name + ".ogg")
         kicksfile = os.path.join(self.path, chunk_name + ".kicks")
         snaresfile = os.path.join(self.path, chunk_name + ".snares")
-
-        if self.print_filename:
-            print(audiofile)
 
         audio, samplerate = torchaudio.load(audiofile)
 
@@ -92,5 +80,5 @@ class DanceDataset(Dataset):
 
         labels = torch.stack([kicks, snares], dim=1)
 
-        return buffers, labels
+        return buffers, labels, audiofile
 

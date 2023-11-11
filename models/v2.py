@@ -12,25 +12,47 @@ class V2(nn.Module):
             nn.Conv1d(32, 64, 3, padding=1), 
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2), 
-            nn.Dropout(0.3)
+            nn.Conv1d(64, 128, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2),
+            nn.Conv1d(128, 256, 3, padding=1),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2),
+            nn.Dropout(0.5),
         )
 
-        self.interface_size = buffer_size * 64 // 2 // 2
+        self.interface_size = buffer_size * 16
 
-        hidden_size=64
-        rnn_layers=4
+        hidden_size=128
         self.lstm = nn.LSTM(
             input_size=self.interface_size, 
             hidden_size=hidden_size, 
-            num_layers=rnn_layers, 
-            dropout=0.3,
+            num_layers=5, 
+            dropout=0.5,
             batch_first=True
         )
 
-        self.dense = nn.Sequential(
-            nn.Linear(hidden_size, 2),
-            nn.Sigmoid()
-        )
+        funnel_length = 5
+        final_size = 2
+        layers = []
+
+        for i in range(funnel_length):
+            a = funnel_length - i
+            input_size = final_size * 2 ** (a + 1)
+            output_size = final_size * 2 ** a
+
+            layers += [
+                nn.Linear(input_size, output_size), 
+                nn.ReLU(),
+                nn.Dropout(0.5)
+            ]
+
+        layers += [
+            nn.Linear(final_size * 2, final_size),
+            nn.Sigmoid() 
+        ]
+
+        self.dense = nn.Sequential(*layers)
 
     def forward(self, batch_inputs, state = None):  # takes a batch of sequences
         batch_size, seq_len, buffer_size = batch_inputs.size()

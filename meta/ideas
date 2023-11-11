@@ -1,21 +1,22 @@
-Application in the Browser
 
+- make funnels for audio events 
+- schedule learn rate 0.001 => 0.00001 (over 50 epochs) 
 
+////
 
-- when training save model every x epochs
-- weight buffers with events higher than others
-- observe how it decreases to 0
+- D: when training save model every x epochs
+- D: weight buffers with events higher than others
+- D: observe how it decreases to 0
 
 Optimizing training etc: 
 - Maybe I need shorter chunks (like 8s or 4s) 
 
-- lint
-
-
 Experimente
 - D: Mono (Performance vorteil?) 
 
-Training
+3) Application in the Browser
+
+2) Training
 
 - D: Exit when change in loss < threshold
 
@@ -29,7 +30,7 @@ Training
 - Convert to ONNX 
 - Use it in the browser with onnxruntime-web
 
-Ground Truth
+1) Ground Truth
 
 - Use data from Nighthawks annotated manually for fine tuning
 

@@ -32,7 +32,7 @@ parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Cu
 
 # hyperparameters
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
-parser.add_argument("-r", "--learning-rate", type=float, default=1e-2, help="learning rate")
+parser.add_argument("-r", "--learning-rate", type=float, default=5e-4, help="learning rate")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 
 # audio
@@ -80,14 +80,27 @@ batch_size = args.batch_size
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Assuming you have prepared your dataset and DataLoader
-dataset = DanceDataset(args.chunks_path, config.buffer_size, config.samplerate, max_size=args.dataset_size)
+dataset = DanceDataset(args.chunks_path, config.buffer_size, config.samplerate)
 print('dataset size: ', len(dataset))
 print()
 
-train_size = int(0.8 * len(dataset))
-val_size = len(dataset) - train_size
+data_size = len(dataset) 
+if args.dataset_size is not None:
+    if args.dataset_size > data_size:
+        print('dataset size is smaller than requested size')
+        exit(0)
+    else:
+        data_size = args.dataset_size
 
-train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+# select a random subset
+indizes = torch.randperm(len(dataset))[:data_size]
+print(indizes)
+subset = torch.utils.data.Subset(dataset, indizes)
+
+train_size = int(0.8 * data_size)
+val_size = data_size - train_size
+
+train_dataset, val_dataset = random_split(subset, [train_size, val_size])
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
@@ -117,6 +130,10 @@ if args.continue_from is not None:
         exit()
 else: 
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+
+
+# scale down learning rate to 0.1 from initial value after 
+scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1)
 
 last_epoch = first_epoch + args.num_epochs
 
@@ -160,13 +177,13 @@ loss = None
 # Training loop
 for epoch in range(first_epoch, last_epoch):
 
-    print(f"Epoch {epoch+1} of {last_epoch}")
-    print('\nTraining')
+    print(f"\nEpoch {epoch+1} of {last_epoch}")
+    print('Training')
 
     model.train()  # Set the model to training mode
     start_time = time.time()
 
-    for i, (batch_inputs, batch_labels) in enumerate(train_loader):
+    for i, (batch_inputs, batch_labels, _) in enumerate(train_loader):
 
         if not args.summarize: print('\rbatch', i + 1, 'of', (train_size - 1) // batch_size + 1, end='\r', flush=True)
 
@@ -196,6 +213,8 @@ for epoch in range(first_epoch, last_epoch):
 
     print()
 
+    scheduler.step()
+
     # Validation after each epoch
     model.eval()  # Set the model to evaluation mode
     print('Evaluation')
@@ -204,7 +223,7 @@ for epoch in range(first_epoch, last_epoch):
         total_loss = 0
         total_batches = 0
 
-        for i, (val_inputs, val_labels) in enumerate(val_loader):
+        for i, (val_inputs, val_labels, _) in enumerate(val_loader):
 
             if not args.summarize: print('\rbatch', i + 1, 'of', (val_size - 1) // batch_size + 1, end='\r', flush=True)
 

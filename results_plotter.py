@@ -4,11 +4,13 @@ import matplotlib.pyplot as plt
 
 # this plots an audio waveform and a presence array
 
+TITLE = 'audio waveform and audio event presence'
+
 class ResultsPlotter: 
-    def __init__(self, buffersize, samplerate): 
+    def __init__(self, buffersize, samplerate, title=TITLE ): 
         self.buffersize = buffersize
         self.samplerate = samplerate
-
+        self.title = title
 
     def plot_wav(self, waveform): 
         self.samplesize = waveform.shape[0]
@@ -18,7 +20,7 @@ class ResultsPlotter:
 
         _, ax1 = plt.subplots()
         # set title
-        ax1.set_title('audio waveform and audio event presence')
+        ax1.set_title(self.title)
         ax1.plot(time, waveform, color='black', linewidth=0.1)
 
         ax1.set_xlabel('Time [s]')
@@ -39,12 +41,8 @@ class ResultsPlotter:
         # combine self.ax2_xvalues and intensity into pairs for filtering
         pairs = np.array([self.ax2_xvalues, intensities])
         
-        print(pairs) 
-
         # filter out all pairs where y < 0.01
         pairs = pairs[:, pairs[1] > threshold]
-
-        print(pairs)
 
         self.ax2.bar(pairs[0], pairs[1], color=color, label=name, width=self.buffer_duration, alpha=0.5, align='edge')
 

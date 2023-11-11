@@ -28,16 +28,12 @@ def getModelClass(name):
     for key in models.keys():
         if key == name:
             return models[key]
-    print('valid models are:')
-    for key in models.keys():
-        print(key)
     raise Exception('invalid model')
 
 def loadModel(file):
     obj = torch.load(file)
 
     model_type = obj['model_type']
-    print('loaded checkpoint of model type', model_type)
     modelClass = getModelClass(model_type)
 
     model = modelClass()
