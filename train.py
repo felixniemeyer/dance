@@ -32,7 +32,7 @@ parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Cu
 
 # hyperparameters
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
-parser.add_argument("-r", "--learning-rate", type=float, default=5e-4, help="learning rate")
+parser.add_argument("-r", "--learning-rate", type=float, default=1e-4, help="learning rate")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 
 # audio
@@ -91,16 +91,14 @@ if args.dataset_size is not None:
         exit(0)
     else:
         data_size = args.dataset_size
+        indizes = torch.randperm(len(dataset))[:data_size]
+        dataset = torch.utils.data.Subset(dataset, indizes)
 
-# select a random subset
-indizes = torch.randperm(len(dataset))[:data_size]
-print(indizes)
-subset = torch.utils.data.Subset(dataset, indizes)
 
 train_size = int(0.8 * data_size)
 val_size = data_size - train_size
 
-train_dataset, val_dataset = random_split(subset, [train_size, val_size])
+train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)

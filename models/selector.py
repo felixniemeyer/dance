@@ -8,6 +8,7 @@ from .big_rnn_and_funnel import BigRNNAndFunnel
 from .rnn_and_2_funnels import RNNAnd2Funnels
 from .separate_lanes import SeparateLanes
 from .v2 import V2
+from .v2Funnel import V2Funnel
 
 models = {
     'cnn_only': CNNOnly,

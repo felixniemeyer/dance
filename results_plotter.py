@@ -7,10 +7,11 @@ import matplotlib.pyplot as plt
 TITLE = 'audio waveform and audio event presence'
 
 class ResultsPlotter: 
-    def __init__(self, buffersize, samplerate, title=TITLE ): 
+    def __init__(self, buffersize, samplerate, title=TITLE, model_count=0 ): 
         self.buffersize = buffersize
         self.samplerate = samplerate
         self.title = title
+        self.model_count = model_count
 
     def plot_wav(self, waveform): 
         self.samplesize = waveform.shape[0]
@@ -18,35 +19,55 @@ class ResultsPlotter:
 
         time = np.linspace(0, self.duration, num=self.samplesize)
 
-        _, ax1 = plt.subplots()
-        # set title
-        ax1.set_title(self.title)
-        ax1.plot(time, waveform, color='black', linewidth=0.1)
+        self.fig, self.axes = plt.subplots(1 + self.model_count, 1, sharex=True)
 
-        ax1.set_xlabel('Time [s]')
-        ax1.set_ylabel('Waveform amplitude')
-        ax1.legend
+        ax = self.axes[0]
+        ax.set_title(self.title)
+        ax.plot(time, waveform, color='black', linewidth=0.1)
 
-        self.ax2 = ax1.twinx()
-        self.ax2.set_ylabel('Audio event presence')
+        ax.set_xlabel('Time [s]')
+        ax.set_ylabel('Waveform amplitude')
+        ax.legend
+
+        self.axis_index = 1
 
         self.buffers_per_file = self.samplesize // self.buffersize
         self.buffer_duration = self.buffersize / self.samplerate
-        self.ax2_xvalues = np.arange(0, self.buffers_per_file) * self.buffer_duration + self.buffer_duration # shift bars to the right 
+        self.xvalues = np.arange(0, self.buffers_per_file) * self.buffer_duration + self.buffer_duration # shift bars to the right 
 
-    def plot_events(self, intensities, name, color, threshold=0.01): 
-        if self.ax2 is None: 
+    def plot_event_group(self, name, values, event_names, colors, threshold=0.01, is_ground_truth=False ): 
+        if len(self.axes) == 0: 
             raise Exception("You need to plot the waveform first")
         
+        if(self.axis_index >= len(self.axes)):
+            raise Exception("You have already plotted the maximum number of models")
+            
+        if is_ground_truth: 
+            # add to waveform plot
+            ax = self.axes[0].twinx()
+            ax.set_ylabel('Ground truth')
+        else: 
+            ax = self.axes[self.axis_index]
+            self.axis_index += 1
+
+        ax.set_ylabel(name)
+
+        for i in range(len(event_names)): 
+            self.plot_event(values[i], event_names[i], colors[i], threshold, ax)
+
+    def plot_event(self, values, event_name, color, threshold, ax):
         # combine self.ax2_xvalues and intensity into pairs for filtering
-        pairs = np.array([self.ax2_xvalues, intensities])
+        pairs = np.array([self.xvalues, values])
         
         # filter out all pairs where y < 0.01
         pairs = pairs[:, pairs[1] > threshold]
 
-        self.ax2.bar(pairs[0], pairs[1], color=color, label=name, width=self.buffer_duration, alpha=0.5, align='edge')
+        ax.bar(pairs[0], pairs[1], color=color, label=event_name, width=self.buffer_duration, alpha=0.5, align='edge')
 
     def finish(self): 
-        self.ax2.legend()
+        for ax in self.axes:
+            # show legend
+            ax.legend()
+            
         plt.show()
         plt.close()

@@ -23,11 +23,10 @@ while True:
             
     audio_data = buffers.numpy().reshape(-1)
 
-    plotter = ResultsPlotter(buffer_size, samplerate, file)
+    plotter = ResultsPlotter(buffer_size, samplerate, file, len(args.checkpoints))
     plotter.plot_wav(audio_data)
 
-    plotter.plot_events(labels[:, 0], 'groundtruth kicks', 'red')
-    plotter.plot_events(labels[:, 1], 'groundtruth snares', 'green')
+    plotter.plot_event_group('ground truth', labels.numpy().T, ['kicks', 'snares'], ['red', 'green'], is_ground_truth=True)
 
     state = None
 
@@ -45,11 +44,10 @@ while True:
             kicks.append(labels[0][0][0].item())
             snares.append(labels[0][0][1].item())
 
+        plotter.plot_event_group(checkpoint, [kicks, snares], ['kicks', 'snares'], ['red', 'green'], 0.01)
 
-        color = np.random.rand(3,)
-        color = color / (1 + color.mean())
-        plotter.plot_events(kicks, 'kicks ' + checkpoint, 'blue', 0.01)
-        plotter.plot_events(snares, 'snares ' + checkpoint, 'cyan', 0.01)  
+        del model
+        del obj
 
     mplayer = subprocess.Popen(["mplayer", "-really-quiet", "-loop", "0", file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     plotter.finish()

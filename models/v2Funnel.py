@@ -1,9 +1,9 @@
 import torch.nn as nn
 from config import buffer_size
 
-class V2(nn.Module):
+class V2Funnel(nn.Module):
     def __init__(self):
-        super(V2, self).__init__()
+        super(V2Funnel, self).__init__()
 
         self.features = nn.Sequential(
             nn.Conv1d(1, 32, 3, padding=1), 
@@ -32,11 +32,27 @@ class V2(nn.Module):
             batch_first=True
         )
 
-        self.dense = nn.Sequential(
-            nn.Linear(hidden_size, 2),
-            nn.Sigmoid()
-        )
+        funnel_length = 5
+        final_size = 2
+        layers = []
 
+        for i in range(funnel_length):
+            a = funnel_length - i
+            input_size = final_size * 2 ** (a + 1)
+            output_size = final_size * 2 ** a
+
+            layers += [
+                nn.Linear(input_size, output_size), 
+                nn.ReLU(),
+                nn.Dropout(0.5)
+            ]
+
+        layers += [
+            nn.Linear(final_size * 2, final_size),
+            nn.Sigmoid() 
+        ]
+
+        self.dense = nn.Sequential(*layers)
 
     def forward(self, batch_inputs, state = None):  # takes a batch of sequences
         batch_size, seq_len, buffer_size = batch_inputs.size()
