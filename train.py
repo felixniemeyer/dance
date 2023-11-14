@@ -246,7 +246,7 @@ for epoch in range(first_epoch, last_epoch):
     if not args.summarize: print(f"Epoch duration: {epoch_duration:.2f} seconds")
 
     epoch_1 = epoch + 1
-    if (args.checkpoint_interval != None and (epoch - first_epoch) % args.checkpoint_interval == 0) or epoch_1 == last_epoch: 
+    if (args.checkpoint_interval != None and (epoch_1 - first_epoch) % args.checkpoint_interval == 0) or epoch_1 == last_epoch: 
         file_path = f"{save_path}{epoch_1}.pt"
         print('\nSaving model to', file_path)
         saveModel(file_path, model, {

@@ -1,4 +1,8 @@
 
+Try v2Funnel nochmal.
+- 
+
+
 - make funnels for audio events 
 - schedule learn rate 0.001 => 0.00001 (over 50 epochs) 
 

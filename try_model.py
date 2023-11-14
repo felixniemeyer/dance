@@ -28,11 +28,11 @@ while True:
 
     plotter.plot_event_group('ground truth', labels.numpy().T, ['kicks', 'snares'], ['red', 'green'], is_ground_truth=True)
 
-    state = None
-
     for checkpoint in args.checkpoints:
         model, obj = loadModel(checkpoint)
         model.to(args.device_type)
+
+        state = None
 
         kicks = []
         snares = []
@@ -45,9 +45,6 @@ while True:
             snares.append(labels[0][0][1].item())
 
         plotter.plot_event_group(checkpoint, [kicks, snares], ['kicks', 'snares'], ['red', 'green'], 0.01)
-
-        del model
-        del obj
 
     mplayer = subprocess.Popen(["mplayer", "-really-quiet", "-loop", "0", file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     plotter.finish()

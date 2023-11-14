@@ -8,7 +8,9 @@ from .big_rnn_and_funnel import BigRNNAndFunnel
 from .rnn_and_2_funnels import RNNAnd2Funnels
 from .separate_lanes import SeparateLanes
 from .v2 import V2
-from .v2Funnel import V2Funnel
+from .v2_funnel import V2Funnel
+from .v2_small import V2Small
+from .v2_large import V2Large
 
 models = {
     'cnn_only': CNNOnly,
@@ -19,7 +21,10 @@ models = {
     'rnn_and_2_funnels': RNNAnd2Funnels,
     'separate_lanes': SeparateLanes, 
     'rnn_2f_dropout': RNNAnd2Funnels,
-    'v2': V2
+    'v2': V2,
+    'v2_funnel': V2Funnel, 
+    'v2_small': V2Small,
+    'v2_large': V2Large
 }
 
 def getModels():
@@ -36,6 +41,8 @@ def loadModel(file):
 
     model_type = obj['model_type']
     modelClass = getModelClass(model_type)
+
+    print('loading model: ', model_type)
 
     model = modelClass()
     model.load_state_dict(obj['model_state_dict']) 
