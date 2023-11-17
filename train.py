@@ -32,7 +32,7 @@ parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Cu
 
 # hyperparameters
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
-parser.add_argument("-r", "--learning-rate", type=float, default=1e-4, help="learning rate")
+parser.add_argument("-r", "--learning-rate", type=float, default=3e-5, help="learning rate")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 
 # audio
@@ -140,6 +140,7 @@ class CustomLoss(nn.Module):
         super(CustomLoss, self).__init__()
         self.relative_offset = relative_offset
         self.criterion = nn.CrossEntropyLoss()
+        self.boost = 4 # 9
 
     def forward(self, full_predictions, full_labels):
         tfs = int(full_labels.shape[1] * self.relative_offset)
@@ -150,7 +151,7 @@ class CustomLoss(nn.Module):
         # weights = torch.where(torch.logical_or(y_true == 1, y_pred == 1), torch.tensor(10.0), torch.tensor(1))
 
         # weights = (max of elements of last dimension) * 9 + 1
-        weights = torch.max(labels, dim=2)[0] * 9 + 1
+        weights = torch.max(labels, dim=2)[0] * self.boost + 1
         
         # Apply weights to the binary cross-entropy loss for each output dimension
         loss_1 = nn.functional.binary_cross_entropy(predictions[:, :, 0], labels[:, :, 0], weight=weights)
