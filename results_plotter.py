@@ -21,6 +21,9 @@ class ResultsPlotter:
 
         self.fig, self.axes = plt.subplots(1 + self.model_count, 1, sharex=True)
 
+        if self.model_count == 0: 
+            self.axes = [self.axes]
+
         ax = self.axes[0]
         ax.set_title(self.title)
         ax.plot(time, waveform, color='black', linewidth=0.1)
@@ -39,14 +42,12 @@ class ResultsPlotter:
         if len(self.axes) == 0: 
             raise Exception("You need to plot the waveform first")
         
-        if(self.axis_index >= len(self.axes)):
-            raise Exception("You have already plotted the maximum number of models")
-            
         if is_ground_truth: 
-            # add to waveform plot
             ax = self.axes[0].twinx()
             ax.set_ylabel('Ground truth')
         else: 
+            if(self.axis_index >= len(self.axes)):
+                raise Exception("You have already plotted the maximum number of models")
             ax = self.axes[self.axis_index]
             self.axis_index += 1
 
