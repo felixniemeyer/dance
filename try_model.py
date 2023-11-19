@@ -49,3 +49,4 @@ while True:
     mplayer = subprocess.Popen(["mplayer", "-really-quiet", "-loop", "0", file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     plotter.finish()
     mplayer.kill()
+
