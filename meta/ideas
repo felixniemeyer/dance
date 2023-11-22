@@ -1,3 +1,15 @@
+better train data: 
+
+
+- fix fluctuating loss
+	- investigate
+	- learning rate still too high? 
+
+- regenerate data
+- normalize data
+- find out kick / snare volume or velocity... 
+	- store that in the label data
+	- if there are multiple, take diagonal as velocity
 
 Try v2Funnel nochmal.
 - 

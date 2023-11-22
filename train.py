@@ -24,6 +24,7 @@ parser.add_argument("model", type=str, help="model to train. Options: " + ",".jo
 # in
 parser.add_argument("--chunks-path", type=str, default='data/chunks/lakh_clean', help="path to chunks folder")
 parser.add_argument("--continue-from", type=int, default=None, help="Epoch number to continue from.")
+parser.add_argument("--continue-from-file", type=str, default=None, help="File to continue from. Overrides --continue-from.")
 
 # out
 parser.add_argument("--checkpoints-path", type=str, default='checkpoints', help="path to checkpoints folder. Structure: <checkpoints_path>/<tag>/<epoch>.pt")
@@ -33,7 +34,9 @@ parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Cu
 # hyperparameters
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
 parser.add_argument("-r", "--learning-rate", type=float, default=3e-5, help="learning rate")
+parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.9, help="learning rate decay")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
+parser.add_argument("-w", "--add-weight", type=float, default=2, help="additional weight for frames with audio events loss")
 
 # audio
 parser.add_argument("--audio-event-half-life", type=float, default=0.02, help="half life of kicks and snares in seconds")
@@ -113,9 +116,11 @@ model_class = getModelClass(args.model)
 model = model_class().to(device)
 
 if args.continue_from is not None:
+    args.continue_from_path = f"{args.checkpoints_path}/{args.tag}/{args.continue_from}.pt"
+
+if args.continue_from_path is not None:
     try: 
-        file = f"{args.checkpoints_path}/{args.tag}/{args.continue_from}.pt"
-        model, obj = loadModel(file)
+        model, obj = loadModel(args.continue_from_path)
         model.to(device)
 
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
@@ -131,7 +136,7 @@ else:
 
 
 # scale down learning rate to 0.1 from initial value after 
-scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1)
+scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.learning_rate_decay, last_epoch=-1)
 
 last_epoch = first_epoch + args.num_epochs
 
@@ -140,7 +145,7 @@ class CustomLoss(nn.Module):
         super(CustomLoss, self).__init__()
         self.relative_offset = relative_offset
         self.criterion = nn.CrossEntropyLoss()
-        self.boost = 4 # 9
+        self.boost = args.add_weight 
 
     def forward(self, full_predictions, full_labels):
         tfs = int(full_labels.shape[1] * self.relative_offset)
@@ -160,7 +165,7 @@ class CustomLoss(nn.Module):
         # Return the mean loss
         return (loss_1 + loss_2) / 2.0  # You can adjust this based on your preference
 
-criterion = CustomLoss(0.2)
+criterion = CustomLoss(0.1)
 
 avg_loss = 0
 toal_time = 0
