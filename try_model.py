@@ -1,5 +1,6 @@
 import numpy as np
 import argparse
+import subprocess
 
 from dance_data import DanceDataset
 from results_plotter import ResultsPlotter
@@ -11,27 +12,27 @@ parser.add_argument("checkpoints", nargs="*", type=str, help="Checkpoints")
 parser.add_argument("-d", "--device-type", type=str, default="cpu", help="device type (cpu or cuda)")
 args = parser.parse_args()
 
-ds = DanceDataset("data/chunks/lakh_clean", buffer_size, samplerate, print_filename=True)
-
-print('showing random chunks from dataset')
-print('for each applying the following checkpoints:' + '\n'.join(args.checkpoints))
+ds = DanceDataset("data/chunks/lakh_clean", buffer_size, samplerate)
 
 while True:
     i = np.random.randint(0, len(ds))
 
-    buffers, labels = ds[i]
+    buffers, labels, file = ds[i]
 
+    print("Trying on: ", file)
+            
     audio_data = buffers.numpy().reshape(-1)
 
-    plotter = ResultsPlotter(buffer_size, samplerate)
+    plotter = ResultsPlotter(buffer_size, samplerate, file, len(args.checkpoints))
     plotter.plot_wav(audio_data)
 
-    plotter.plot_events(labels[:, 0], 'groundtruth kicks', 'red')
-    plotter.plot_events(labels[:, 1], 'groundtruth snares', 'green')
+    plotter.plot_event_group('ground truth', labels.numpy().T, ['kicks', 'snares'], ['red', 'green'], is_ground_truth=True)
 
     for checkpoint in args.checkpoints:
         model, obj = loadModel(checkpoint)
         model.to(args.device_type)
+
+        state = None
 
         kicks = []
         snares = []
@@ -39,14 +40,13 @@ while True:
             sequence = buffer.unsqueeze(0)
             batch = sequence.unsqueeze(0)
 
-            labels = model(batch)[0][0]
-            kicks.append(labels[0].item())
-            snares.append(labels[1].item())
+            labels, state = model(batch, state)
+            kicks.append(labels[0][0][0].item())
+            snares.append(labels[0][0][1].item())
 
-        color = np.random.rand(3,)
-        color = color / (1 + color.mean())
-        plotter.plot_events(kicks, 'kicks ' + checkpoint, 'blue', 0.01)
-        plotter.plot_events(snares, 'snares ' + checkpoint, 'yellow', 0.01)  
-    
+        plotter.plot_event_group(checkpoint, [kicks, snares], ['kicks', 'snares'], ['red', 'green'], 0.01)
+
+    mplayer = subprocess.Popen(["mplayer", "-really-quiet", "-loop", "0", file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     plotter.finish()
+    mplayer.kill()
 

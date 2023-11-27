@@ -34,13 +34,9 @@ class DanceDataset(Dataset):
         self, 
         data_path, 
         buffer_size, 
-        samplerate, 
-        teacher_forcing_size = 0, 
-        max_size = None, 
-        print_filename=False, 
+        samplerate
     ):
         self.path = data_path
-        self.print_filename = print_filename        
         self.buffer_size = buffer_size
         self.samplerate = samplerate
 
@@ -53,14 +49,6 @@ class DanceDataset(Dataset):
                 self.chunk_names.append(filename)
                 count += 1
 
-        if max_size is not None: 
-            if max_size < len(self.chunk_names):
-                self.chunk_names = self.chunk_names[:max_size]
-            else: 
-                print('warning: wanted', max_size, 'chunks, but only found', len(self.chunk_names))
-
-        self.teacher_forcing_size = teacher_forcing_size
-
     def __len__(self):
         return len(self.chunk_names)
 
@@ -70,9 +58,6 @@ class DanceDataset(Dataset):
         audiofile = os.path.join(self.path, chunk_name + ".ogg")
         kicksfile = os.path.join(self.path, chunk_name + ".kicks")
         snaresfile = os.path.join(self.path, chunk_name + ".snares")
-
-        if self.print_filename:
-            print(audiofile)
 
         audio, samplerate = torchaudio.load(audiofile)
 
@@ -89,12 +74,11 @@ class DanceDataset(Dataset):
         buffers = audio[:sequence_size].reshape(-1, self.buffer_size)
 
         assert buffer_count == buffers.shape[0], "sequence size mismatch"
-        assert buffer_count > self.teacher_forcing_size, f"audio too short: {buffer_count} buffers"
         
         kicks = readEventsFileIntoLabels(kicksfile, buffer_count, self.buffer_size, samplerate)
         snares = readEventsFileIntoLabels(snaresfile, buffer_count, self.buffer_size, samplerate)
 
         labels = torch.stack([kicks, snares], dim=1)
 
-        return buffers, labels
+        return buffers, labels, audiofile
 

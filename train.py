@@ -27,13 +27,13 @@ parser.add_argument("--continue-from", type=int, default=None, help="Epoch numbe
 
 # out
 parser.add_argument("--checkpoints-path", type=str, default='checkpoints', help="path to checkpoints folder. Structure: <checkpoints_path>/<tag>/<epoch>.pt")
+parser.add_argument("-ci", "--checkpoint-interval", type=int, default=1, help="save checkpoint every n epochs")
 parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Current github tag will be used as default.")
 
 # hyperparameters
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
-parser.add_argument("-r", "--learning-rate", type=float, default=1e-2, help="learning rate")
+parser.add_argument("-r", "--learning-rate", type=float, default=3e-5, help="learning rate")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
-parser.add_argument("-l", "--loss-function", type=str, default='bcew', help="loss function to use. Options: mse, l1, smoothl1, bcew")
 
 # audio
 parser.add_argument("--audio-event-half-life", type=float, default=0.02, help="half life of kicks and snares in seconds")
@@ -44,8 +44,8 @@ parser.add_argument("--summarize", action='store_true', help="don't log, show on
 
 args = parser.parse_args()
 
-# If tfs is set to 0, it means that the model is using its own generated output as input for all time steps, which is standard autoregressive behavior (no teacher forcing). If tfs is set to a positive value, it implies that the model uses ground truth inputs for the initial tfs time steps and then switches to its own predictions afterward (partial teacher forcing). 
-tfs = config.chunk_duration * config.samplerate // 512 // 3
+relative_offset = 0.2
+
 
 if args.tag is None:
     os.system('git log --decorate -n 1 > .git_tag.txt~')
@@ -70,40 +70,38 @@ target_epoch = args.num_epochs
 if args.continue_from is not None:
     target_epoch += args.continue_from
 
-args.save_to = f"{args.checkpoints_path}/{args.tag}/{target_epoch}.pt"
+save_path = f"{args.checkpoints_path}/{args.tag}/"
 
-os.makedirs(os.path.dirname(args.save_to), exist_ok=True)
+os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
 batch_size = args.batch_size
 
+# Initialize the model
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # Assuming you have prepared your dataset and DataLoader
-dataset = DanceDataset(args.chunks_path, config.buffer_size, config.samplerate, max_size=args.dataset_size, teacher_forcing_size=tfs)
+dataset = DanceDataset(args.chunks_path, config.buffer_size, config.samplerate)
 print('dataset size: ', len(dataset))
 print()
 
-train_size = int(0.8 * len(dataset))
-val_size = len(dataset) - train_size
+data_size = len(dataset) 
+if args.dataset_size is not None:
+    if args.dataset_size > data_size:
+        print('dataset size is smaller than requested size')
+        exit(0)
+    else:
+        data_size = args.dataset_size
+        indizes = torch.randperm(len(dataset))[:data_size]
+        dataset = torch.utils.data.Subset(dataset, indizes)
+
+
+train_size = int(0.8 * data_size)
+val_size = data_size - train_size
 
 train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
-
-# Initialize the model
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# Define loss function 
-if args.loss_function == 'mse':
-    criterion = nn.MSELoss()
-elif args.loss_function == 'l1':
-    criterion = nn.L1Loss()
-elif args.loss_function == 'smoothl1':
-    criterion = nn.SmoothL1Loss()
-elif args.loss_function == 'bcew':
-    criterion = nn.BCEWithLogitsLoss()
-else:
-    raise Exception('invalid loss function')
-
 
 
 # Load model from disk if it exists
@@ -131,82 +129,144 @@ if args.continue_from is not None:
 else: 
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 
+
+# scale down learning rate to 0.1 from initial value after 
+scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.9, last_epoch=-1)
+
 last_epoch = first_epoch + args.num_epochs
 
-loss = 0
+class CustomLoss(nn.Module):
+    def __init__(self, relative_offset):
+        super(CustomLoss, self).__init__()
+        self.relative_offset = relative_offset
+        self.criterion = nn.CrossEntropyLoss()
+        self.boost = 4 # 9
+
+    def forward(self, full_predictions, full_labels):
+        tfs = int(full_labels.shape[1] * self.relative_offset)
+        predictions = full_predictions[:, tfs:, :]
+        labels = full_labels[:, tfs:, :]
+
+        # Define weights based on the condition where at least one output is 1
+        # weights = torch.where(torch.logical_or(y_true == 1, y_pred == 1), torch.tensor(10.0), torch.tensor(1))
+
+        # weights = (max of elements of last dimension) * 9 + 1
+        weights = torch.max(labels, dim=2)[0] * self.boost + 1
+        
+        # Apply weights to the binary cross-entropy loss for each output dimension
+        loss_1 = nn.functional.binary_cross_entropy(predictions[:, :, 0], labels[:, :, 0], weight=weights)
+        loss_2 = nn.functional.binary_cross_entropy(predictions[:, :, 1], labels[:, :, 1], weight=weights) 
+        
+        # Return the mean loss
+        return (loss_1 + loss_2) / 2.0  # You can adjust this based on your preference
+
+criterion = CustomLoss(0.2)
+
 avg_loss = 0
 toal_time = 0
-epoch_count = 0
+
+forward_time = 0
+loss_calc_time = 0
+backpropagation_time = 0
+start_calc = 0
+to_device_time = 0
+
+loss = None
 
 # Training loop
 for epoch in range(first_epoch, last_epoch):
 
-    print(f"Epoch {epoch+1} of {last_epoch}")
-    print('\nTraining')
+    print(f"\nEpoch {epoch+1} of {last_epoch}")
+    print('Training')
+
     model.train()  # Set the model to training mode
     start_time = time.time()
-    for i, (batch_inputs, batch_labels) in enumerate(train_loader):
-        if not args.summarize: print('\rbatch', i + 1, 'of', (train_size - 1) // batch_size + 1, end='\r', flush=True)
-        # print('shape', batch_inputs.shape, batch_labels.shape)
-        batch_inputs, batch_labels = batch_inputs.to(device), batch_labels.to(device)
 
-        # Zero the gradients from previous iterations
-        optimizer.zero_grad()
+    for i, (batch_inputs, batch_labels, _) in enumerate(train_loader):
+
+        if not args.summarize: print('\rbatch', i + 1, 'of', (train_size - 1) // batch_size + 1, end='\r', flush=True)
+
+        start_calc = time.time()
+        batch_inputs, batch_labels = batch_inputs.to(device), batch_labels.to(device)
+        to_device_time = time.time() - start_calc
 
         # Forward pass
-        outputs = model(batch_inputs)
+        start_calc = time.time()
+        outputs, _ = model(batch_inputs)
+        forward_time += time.time() - start_calc
+
+        # Zero out the gradients
+        optimizer.zero_grad()
 
         # Compute the loss
-        # loss = criterion(outputs[:, tfs:, :], batch_labels[:, tfs:, :]) # Teacher Forcing
-        loss = criterion(outputs, batch_labels) 
+        start_calc = time.time()
+        loss = criterion(outputs, batch_labels)
+        loss_calc_time += time.time() - start_calc
 
         # Backpropagation
+        start_calc = time.time()
         loss.backward()
+        backpropagation_time = time.time() - start_calc
 
         optimizer.step()
 
     print()
 
+    scheduler.step()
+
     # Validation after each epoch
     model.eval()  # Set the model to evaluation mode
     print('Evaluation')
     with torch.no_grad():
+
         total_loss = 0
-        total_samples = 0
-        for i, (val_inputs, val_labels) in enumerate(val_loader):
+        total_batches = 0
+
+        for i, (val_inputs, val_labels, _) in enumerate(val_loader):
+
             if not args.summarize: print('\rbatch', i + 1, 'of', (val_size - 1) // batch_size + 1, end='\r', flush=True)
+
             val_inputs, val_labels = val_inputs.to(device), val_labels.to(device)
 
             # Forward pass
-            val_outputs = model(val_inputs)
+            val_outputs, _ = model(val_inputs)
 
             # Compute the loss
             loss = criterion(val_outputs, val_labels)
 
             # Compute accuracy
-            total_loss += loss.item() * val_inputs.size(0)
-            total_samples += val_inputs.size(0)
+            total_loss += loss
+            total_batches += 1
             
-        avg_loss += total_loss / total_samples
+        avg_loss += total_loss / total_batches
         print()
         print(f"Validation loss: {loss:.4f}")
 
-    epoch_count += 1
     epoch_duration = time.time() - start_time
     toal_time += epoch_duration
     if not args.summarize: print(f"Epoch duration: {epoch_duration:.2f} seconds")
 
-print('\nSaving model to', args.save_to)
-saveModel(args.save_to, model, {
-    'optimizer_state_dict': optimizer.state_dict(),
-    'epoch': last_epoch,
-    'hyperparameters': {
-        'learning_rate': args.learning_rate,
-        'batch_size': args.batch_size,
-        'continued_from': args.continue_from,
-    }
-})
+    epoch_1 = epoch + 1
+    if (args.checkpoint_interval != None and (epoch_1 - first_epoch) % args.checkpoint_interval == 0) or epoch_1 == last_epoch: 
+        file_path = f"{save_path}{epoch_1}.pt"
+        print('\nSaving model to', file_path)
+        saveModel(file_path, model, {
+            'optimizer_state_dict': optimizer.state_dict(),
+            'epoch': epoch + 1,
+            'hyperparameters': {
+                'learning_rate': args.learning_rate,
+                'batch_size': args.batch_size,
+                'continued_from': args.continue_from,
+            }
+        })
 
+print(f"\nTotal training time: {toal_time:.2f} seconds")
+print(f"Total forward pass time: {forward_time:.2f} seconds ({forward_time / toal_time * 100:.2f}%)")
+print(f"Total loss calculation time: {loss_calc_time:.2f} seconds ({loss_calc_time / toal_time * 100:.2f}%)")
+print(f"Total backpropagation time: {backpropagation_time:.2f} seconds ({backpropagation_time / toal_time * 100:.2f}%)")
+print(f"Total to device time: {to_device_time:.2f} seconds ({to_device_time / toal_time * 100:.2f}%)")
+
+epoch_count = last_epoch - first_epoch
 print(f"\nAverage time per epoch: {toal_time / epoch_count:.2f} seconds")
 print(f"\nAverage validation loss: {avg_loss / epoch_count:.4f}")
 print(f"Final validation loss: {loss:.4f}")

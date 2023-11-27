@@ -2,12 +2,10 @@
 - go mono
 
 #
-
 - INVESTIGATE
 	- why does the NN learn constants after just a few data points?
 
 #
-
 - get any results
 	- simplify model as much as possible (no dropout etc) 
 	- grid train many variations 3 episodes
@@ -18,7 +16,6 @@
 - grid view presence
 
 #
-
 - grid training until monday
 
 	- D: reduce number of combinations
