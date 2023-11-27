@@ -7,7 +7,7 @@ import torch.optim as optim
 
 from dance_data import DanceDataset
 
-from models.selector import getModelClass, loadModel, getModels, saveModel 
+from models.selector import getModelClass, loadModel, getModels, saveModel
 
 from torch.utils.data import DataLoader, random_split
 
@@ -80,7 +80,7 @@ batch_size = args.batch_size
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Assuming you have prepared your dataset and DataLoader
-dataset = DanceDataset(args.chunks_path, config.buffer_size, config.samplerate)
+dataset = DanceDataset(args.chunks_path, config.frame_size, config.samplerate)
 print('dataset size: ', len(dataset))
 print()
 

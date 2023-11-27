@@ -206,7 +206,7 @@ def generate_song(midifile, outpath, soundfonts):
                     # aggregate noteOns with same tick
                     while i < len(note_on_list) and tick == note_on_list[i].tick:
                         note_on = note_on_list[i]
-                        velocity = 1 - ((1 - velocity) * (1 - note.velocity))
+                        velocity = 1 - ((1 - velocity) * (1 - note_on.velocity))
                         i += 1
 
                     # respect tempo_changes
@@ -254,11 +254,11 @@ def generate_song(midifile, outpath, soundfonts):
                         midifile,
                     ]
                     with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
-                        max_size = (duration + 10) * sample_rate * 2 * bits / 8 
+                        max_size = (duration + 15) * sample_rate * 2 * bits / 8
                         max_size += 1024 * 1024 # add 1MB to the max size
                         while process.poll() is None:
                             #if outfile exists
-                            if os.path.exists(outfile): 
+                            if os.path.exists(outfile):
                                 if os.stat(outfile).st_size > max_size:
                                     print('File size bigger than expected, possibly a corrupt midi file')
                                     print('Stopping fluidsynth...')

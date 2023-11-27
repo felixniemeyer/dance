@@ -1,43 +1,25 @@
+"""
+torch dataset implementation for loading chunks
+"""
+
 import os
 import torchaudio
 import torch
 
 from torch.utils.data import Dataset
 
-def readEventsFileIntoLabels(filename, buffer_count, buffer_size, samplerate):
-    events = []
-    with open(filename, 'r') as file:
-        for line in file:
-            events.append(float(line) * samplerate)
+from audio_event import AudioEvent
 
-    # create tensor with shape (sequence_size, 1)
-    intensities = torch.zeros(buffer_count)
-    index = 0
-
-    intensity = 0
-
-    for i in range(0, buffer_count):
-        start = i * buffer_size
-        exclusive_end = start + buffer_size
-
-        intensity = 0
-        while index < len(events) and events[index] < exclusive_end:
-            intensity = 1.
-            index += 1
-
-        intensities[i] = intensity
-
-    return intensities
 
 class DanceDataset(Dataset):
     def __init__(
-        self, 
-        data_path, 
-        buffer_size, 
+        self,
+        data_path,
+        frame_size,
         samplerate
     ):
         self.path = data_path
-        self.buffer_size = buffer_size
+        self.frame_size = frame_size
         self.samplerate = samplerate
 
         filenames = [f[:-4] for f in os.listdir(data_path) if f.endswith(".ogg")]
@@ -55,11 +37,10 @@ class DanceDataset(Dataset):
     def __getitem__(self, index):
         chunk_name = self.chunk_names[index]
 
-        audiofile = os.path.join(self.path, chunk_name + ".ogg")
-        kicksfile = os.path.join(self.path, chunk_name + ".kicks")
-        snaresfile = os.path.join(self.path, chunk_name + ".snares")
+        audio_file_path = os.path.join(self.path, chunk_name + ".ogg")
+        events_file_path = os.path.join(self.path, chunk_name + ".events")
 
-        audio, samplerate = torchaudio.load(audiofile)
+        audio, samplerate = torchaudio.load(audio_file_path)
 
         assert samplerate == self.samplerate, "sample rate mismatch"
 
@@ -68,17 +49,27 @@ class DanceDataset(Dataset):
         # normalize
         audio = audio / audio.abs().max()
 
-        buffer_count = audio.shape[0] // self.buffer_size
-        sequence_size = buffer_count * self.buffer_size
+        number_of_frames = audio.shape[0] // self.frame_size
+        sequence_size = number_of_frames * self.frame_size
 
-        buffers = audio[:sequence_size].reshape(-1, self.buffer_size)
+        frames = audio[:sequence_size].reshape(-1, self.frame_size)
 
-        assert buffer_count == buffers.shape[0], "sequence size mismatch"
-        
-        kicks = readEventsFileIntoLabels(kicksfile, buffer_count, self.buffer_size, samplerate)
-        snares = readEventsFileIntoLabels(snaresfile, buffer_count, self.buffer_size, samplerate)
+        assert number_of_frames == frames.shape[0], "sequence size mismatch"
 
-        labels = torch.stack([kicks, snares], dim=1)
+        labels = torch.zeros(number_of_frames, 2)
 
-        return buffers, labels, audiofile
+        mapping = {
+            35: 0, # kick
+            36: 0, # kick
+            38: 1, # snare
+            40: 1, # snare
+        }
+        with open(events_file_path, 'r', encoding='utf8') as file:
+            for line in file:
+                event = AudioEvent.from_csv_line(line)
+                if event.note in mapping:
+                    frame = event.time * samplerate // self.frame_size
+                    group = mapping[event.note]
+                    labels[frame, group] = 1 - ((1 - labels[frame, group]) * (1 - event.volume))
 
+        return frames, labels, audio_file_path
