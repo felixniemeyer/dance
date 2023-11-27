@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from config import buffer_size
+from config import frame_size
 
 class SeparateLanes(nn.Module):
     def __init__(self):
@@ -18,7 +18,7 @@ class SeparateLanes(nn.Module):
             neurons = hidden_size // 2
 
             self.rnns.append(nn.RNN(
-                input_size=buffer_size,
+                input_size=frame_size,
                 hidden_size=hidden_size,
                 num_layers=rnn_layers,
             ))

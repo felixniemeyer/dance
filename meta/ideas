@@ -19,7 +19,7 @@
 //
 
 - D: when training save model every x epochs
-- D: weight buffers with events higher than others
+- D: weight frames with events higher than others
 - D: observe how it decreases to 0
 
 Experimente

@@ -7,8 +7,8 @@ import matplotlib.pyplot as plt
 TITLE = 'audio waveform and audio event presence'
 
 class ResultsPlotter: 
-    def __init__(self, buffersize, samplerate, title=TITLE, model_count=0 ): 
-        self.buffersize = buffersize
+    def __init__(self, framesize, samplerate, title=TITLE, model_count=0 ): 
+        self.framesize = framesize
         self.samplerate = samplerate
         self.title = title
         self.model_count = model_count
@@ -34,9 +34,9 @@ class ResultsPlotter:
 
         self.axis_index = 1
 
-        self.buffers_per_file = self.samplesize // self.buffersize
-        self.buffer_duration = self.buffersize / self.samplerate
-        self.xvalues = np.arange(0, self.buffers_per_file) * self.buffer_duration + self.buffer_duration # shift bars to the right 
+        self.frames_per_file = self.samplesize // self.framesize
+        self.frame_duration = self.framesize / self.samplerate
+        self.xvalues = np.arange(0, self.frames_per_file) * self.frame_duration + self.frame_duration # shift bars to the right 
 
     def plot_event_group(self, name, values, event_names, colors, threshold=0.01, is_ground_truth=False ): 
         if len(self.axes) == 0: 
@@ -63,7 +63,7 @@ class ResultsPlotter:
         # filter out all pairs where y < 0.01
         pairs = pairs[:, pairs[1] > threshold]
 
-        ax.bar(pairs[0], pairs[1], color=color, label=event_name, width=self.buffer_duration, alpha=0.5, align='edge')
+        ax.bar(pairs[0], pairs[1], color=color, label=event_name, width=self.frame_duration, alpha=0.5, align='edge')
 
     def finish(self): 
         for ax in self.axes:

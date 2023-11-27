@@ -37,9 +37,9 @@ assert audio.shape[0] == config.channels, "channel mismatch"
 print('input audio shape:', audio.shape) 
 
 lenght = audio.shape[1]
-buffers_in_file = lenght // config.buffer_size
-offset = lenght % config.buffer_size
-buffer_duration = config.buffer_size / samplerate
+frames_in_file = lenght // config.frame_size
+offset = lenght % config.frame_size
+frame_duration = config.frame_size / samplerate
 
 # Initialize the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -53,14 +53,14 @@ model.load_state_dict(checkpoint['model_state_dict'])
 kicks = []
 snares = []
 
-# feed the rnn one buffer at a time
+# feed the rnn one frame at a time
 print('analyzing audio file...')
-for i in range(buffers_in_file):
-    start = offset + i * config.buffer_size
-    end = start + config.buffer_size
-    buffer = audio[:, start:end]
+for i in range(frames_in_file):
+    start = offset + i * config.frame_size
+    end = start + config.frame_size
+    frame = audio[:, start:end]
 
-    sequence = buffer.unsqueeze(0)
+    sequence = frame.unsqueeze(0)
     batch = sequence.unsqueeze(0)
 
     model_input = batch.to(device)
@@ -69,16 +69,16 @@ for i in range(buffers_in_file):
 
     # find the index of the highest value in the output vector
 
-    t = (i + 0.5) * buffer_duration
+    t = (i + 0.5) * frame_duration
     if output[0] > 0.8:
         kicks.append(t)
     if output[1] > 0.8:
         snares.append(t)
 
     if i % 100 == 0:
-        print(f"\r{i}/{buffers_in_file} ({i/buffers_in_file*100:.2f}%)", end="\r")
+        print(f"\r{i}/{frames_in_file} ({i/frames_in_file*100:.2f}%)", end="\r")
 
-print(f'{buffers_in_file}/{buffers_in_file} (100.00%), done.')
+print(f'{frames_in_file}/{frames_in_file} (100.00%), done.')
 
 print(kicksfile)
 # write relevant kicks and snares to file

@@ -8,7 +8,7 @@ import numpy as np
 
 from results_plotter import ResultsPlotter
 
-from config import buffer_size, samplerate 
+from config import frame_size, samplerate 
 
 parser = argparse.ArgumentParser(
     'audio and timestamps viewer',
@@ -42,7 +42,7 @@ assert samplerate == samplerate, "sample rate mismatch. Project wide setting is 
 # average all channels
 audio_data = np.mean(audio_data, axis=1)
 
-plotter = ResultsPlotter(buffer_size, samplerate)
+plotter = ResultsPlotter(frame_size, samplerate)
 plotter.plot_wav(audio_data)
 
 for name, eventfile in eventfiles.items():
