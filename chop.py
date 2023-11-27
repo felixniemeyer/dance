@@ -146,52 +146,45 @@ for artist in os.listdir(args.in_path):
                 start_time = start / sample_rate
                 end_time = start_time + chunk_duration * pitch
 
-                has_events = False
                 # write relevant kicks and snares to file
                 with open(outfile + '.events', 'w', encoding='utf8') as f:
                     # start_ and end_time refer to the original pitch in seconds
                     while event_pointer < len(events) and events[event_pointer].time < start_time:
                         event_pointer += 1
                     while event_pointer < len(events) and events[event_pointer].time <= end_time:
-                        time = (events[event_pointer].time - start) / pitch
-                        f.write(str(time) + '\n')
-                        has_events = True
+                        event = events[event_pointer]
+                        time = (event.time - start_time) / pitch
+                        f.write(f"{time:.4f},{event.note},{event.volume:.4f}\n")
                         event_pointer += 1
 
-                if not has_events:
-                    # remove the 2 files
-                    print('start_time', start_time, 'end_time', end_time)
-                    print('No kicks or snares in this chunk. Rolling back.')
-                    os.remove(outfile + '.events')
-                else:
-                    newrate = args.sample_rate * pitch
+                newrate = args.sample_rate * pitch
 
-                    af = f'asetrate={newrate},aresample={args.sample_rate}'
-                    af += f',atrim=start={pitch * start_time}:end={pitch * start_time + chunk_duration + 0.1}'
-                    af += ',asetpts=N/SR/TB'
-                    af += f',alimiter=level_in={args.volume}'
+                af = f'asetrate={newrate},aresample={args.sample_rate}'
+                af += f',atrim=start={start_time / pitch}:end={start_time / pitch + chunk_duration + 0.1}'
+                af += ',asetpts=N/SR/TB'
+                af += f',alimiter=level_in={args.volume}'
 
-                    ffmpeg_args = []
-                    ffmpeg_args += ['-v', 'warning']
-                    ffmpeg_args += ['-n'] # no overwrite
-                    ffmpeg_args += ['-i', infile]
-                    ffmpeg_args += ['-af', af]
-                    ffmpeg_args += ['-t', str(chunk_duration)]
-                    ffmpeg_args += ['-c:a', 'libvorbis']
-                    ffmpeg_args += ['-qscale:a', '6']
-                    ffmpeg_args += ['-ar', str(args.sample_rate)]
-                    ffmpeg_args += [outfile + '.ogg']
+                ffmpeg_args = []
+                ffmpeg_args += ['-v', 'warning']
+                ffmpeg_args += ['-n'] # no overwrite
+                ffmpeg_args += ['-i', infile]
+                ffmpeg_args += ['-af', af]
+                ffmpeg_args += ['-t', str(chunk_duration)]
+                ffmpeg_args += ['-c:a', 'libvorbis']
+                ffmpeg_args += ['-qscale:a', '6']
+                ffmpeg_args += ['-ar', str(args.sample_rate)]
+                ffmpeg_args += [outfile + '.ogg']
 
-                    ffmpeg_call = ['ffmpeg'] + ffmpeg_args
-                    try:
-                        thread = threading.Thread(target=call_ffmpeg, args=(ffmpeg_call, outfile))
-                        thread.start()
-                        threads.append(thread)
-                        if len(threads) >= args.max_processes:
-                            threads[0].join()
-                            threads.pop(0)
-                    except Exception as e:
-                        print('Asynchronous call_ffmpeg failed.', e)
+                ffmpeg_call = ['ffmpeg'] + ffmpeg_args
+                try:
+                    thread = threading.Thread(target=call_ffmpeg, args=(ffmpeg_call, outfile))
+                    thread.start()
+                    threads.append(thread)
+                    if len(threads) >= args.max_processes:
+                        threads[0].join()
+                        threads.pop(0)
+                except Exception as e:
+                    print('Asynchronous call_ffmpeg failed.', e)
 
 for thread in threads:
     thread.join()

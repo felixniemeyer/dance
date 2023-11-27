@@ -3,6 +3,8 @@ torch dataset implementation for loading chunks
 """
 
 import os
+import math
+
 import torchaudio
 import torch
 
@@ -10,6 +12,24 @@ from torch.utils.data import Dataset
 
 from audio_event import AudioEvent
 
+def loadEventsAsLabels(events_file_path, number_of_frames, samplerate, frame_size):
+    labels = torch.zeros(number_of_frames, 2)
+
+    mapping = {
+        35: 0, # kick
+        36: 0, # kick
+        38: 1, # snare
+        40: 1, # snare
+    }
+    with open(events_file_path, 'r', encoding='utf8') as file:
+        for line in file:
+            event = AudioEvent.from_csv_line(line)
+            if event.note in mapping:
+                frame = math.floor(event.time * samplerate / frame_size)
+                group = mapping[event.note]
+                labels[frame][group] = 1 - ((1 - labels[frame][group]) * (1 - event.volume))
+
+    return labels
 
 class DanceDataset(Dataset):
     def __init__(
@@ -27,7 +47,7 @@ class DanceDataset(Dataset):
         count = 0
         self.chunk_names = []
         for filename in filenames:
-            if os.path.exists(os.path.join(data_path, filename + ".kicks")) and os.path.exists(os.path.join(data_path, filename + ".snares")):
+            if os.path.exists(os.path.join(data_path, filename + ".events")):
                 self.chunk_names.append(filename)
                 count += 1
 
@@ -56,20 +76,6 @@ class DanceDataset(Dataset):
 
         assert number_of_frames == frames.shape[0], "sequence size mismatch"
 
-        labels = torch.zeros(number_of_frames, 2)
-
-        mapping = {
-            35: 0, # kick
-            36: 0, # kick
-            38: 1, # snare
-            40: 1, # snare
-        }
-        with open(events_file_path, 'r', encoding='utf8') as file:
-            for line in file:
-                event = AudioEvent.from_csv_line(line)
-                if event.note in mapping:
-                    frame = event.time * samplerate // self.frame_size
-                    group = mapping[event.note]
-                    labels[frame, group] = 1 - ((1 - labels[frame, group]) * (1 - event.volume))
+        labels = loadEventsAsLabels(events_file_path, number_of_frames, samplerate, self.frame_size)
 
         return frames, labels, audio_file_path
