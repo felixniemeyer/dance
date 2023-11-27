@@ -1,19 +1,26 @@
+# use for any midi drum note (hi hats, toms, etc.) 
 
-Try v2Funnel nochmal.
-- 
+# training data revision
+- use loudnorm filter in ffmpeg
+- save velocities
+  - velocity 
+  - channel volume controls
+- shorter chunks (8 seconds)
+- teacher forcing (linear ramp up)
+- mono direkt bei ffmpeg
 
+// 
 
-- make funnels for audio events 
-- schedule learn rate 0.001 => 0.00001 (over 50 epochs) 
+- D: Try v2Funnel nochmal.
 
-////
+- D(nicht so gut): make funnels for audio events 
+- D(niedrige learn rate war wichtig): schedule learn rate 0.001 => 0.00001 (over 50 epochs) 
+
+//
 
 - D: when training save model every x epochs
 - D: weight buffers with events higher than others
 - D: observe how it decreases to 0
-
-Optimizing training etc: 
-- Maybe I need shorter chunks (like 8s or 4s) 
 
 Experimente
 - D: Mono (Performance vorteil?) 

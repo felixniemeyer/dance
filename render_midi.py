@@ -10,6 +10,8 @@ import argparse
 
 import traceback
 
+from  config import channels, relevant_notes
+
 parser = argparse.ArgumentParser(description='Renders midi songs with soundfonts.')
 parser.add_argument('--midi-path', type=str, default='data/midi/lakh_clean', help='path to the directory containing midi files. The following directory structure is assumed: midi-path/<artist>/<song-name>.mid')
 parser.add_argument('--single-file', type=str, default=None, help='path to a single midi file instead of --midi-path')
@@ -46,30 +48,33 @@ if not os.path.exists(args.out_path):
 
 sample_rate = args.sample_rate
 bits = args.bits
-channels = 2
 
 threads = []
 
 def convert_to_ogg(file_without_extension):
     # convert wav to ogg using ffmpeg in the background
     try: 
-        return_code = subprocess.call([
+        command = [
             'ffmpeg',
             '-n', # no overwrite
-            '-v', 'warning',
             '-i', file_without_extension + ".wav",
             '-ac', str(channels),
+            '-af', 'loudnorm',
             '-c:a', 'libvorbis',
             '-qscale:a', '6',
             '-ar', str(sample_rate),
             file_without_extension + ".ogg"
-        ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        ]
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        output, error = process.communicate()
         # remove wav
-        if return_code == 0:
+        if process.returncode == 0:
             print('Deleting wav after conversion of ' + file_without_extension)
             os.remove(file_without_extension + ".wav")
         else: 
             print('Conversion failed for ' + file_without_extension)
+            print('Output: ' + output.decode('utf-8'))
+            print('Error: ' + error.decode('utf-8'))
     except Exception as e:
         print('Exception while converting to ogg: ' + str(e))
         traceback.print_exc()
@@ -108,20 +113,33 @@ def generate_song(midifile, outpath, soundfonts):
         print(f'Track count: {len(mid.tracks)}')
 
         # analyze midi file and find all kicks and snares
-        kicks = []
-        snares = []
+        noteOnLists = {}
+        for i in relevant_notes:
+            noteOnLists[i] = []
 
         hasRelevantPercussion = False
 
         ticks_per_beat = mid.ticks_per_beat
         print('ticks per beat: ' + str(ticks_per_beat))
 
+        class NoteOnEvent: 
+            def __init__(self, tick, velocity):
+                self.tick = tick
+                self.velocity = velocity
+
         class TempoChange:
             def __init__(self, tick, tempo):
-                self.at_tick = tick
+                self.tick = tick
                 self.tempo = tempo
 
+        class VolumeChange:
+            def __init__(self, tick, volume):
+                self.tick = tick
+                self.volume = volume
+
+
         tempo_changes = []
+        volume_changes = []
 
         for i, track in enumerate(mid.tracks):
             # look for program change to drums
@@ -136,52 +154,87 @@ def generate_song(midifile, outpath, soundfonts):
                     tempo_changes.append(TempoChange(ticks, msg.tempo))
                 if msg.type == 'note_on': 
                     if msg.channel == 9:
-                        if msg.note == 36 or msg.note == 35:
-                            trackKicks.append(ticks) 
-                        if msg.note >= 37 and msg.note <= 40:
-                            trackSnares.append(ticks)
+                        if msg.note in relevant_notes:
+                            noteOnLists[msg.note].append(NoteOnEvent(ticks, msg.velocity))
+                if msg.type == 'control_change':
+                    if msg.channel == 9 and msg.control == 7:
+                        volume_changes.append(VolumeChange(ticks, msg.value))
+                        print('Volume change: ' + str(msg.value) + ' at ' + str(ticks))
 
-            if(len(trackKicks) > 10 or len(trackSnares) > 10):
-                hasRelevantPercussion = True
-                print('Found drums in track ' + str(i) + ' ' + track.name)
-                kicks += trackKicks
-                snares += trackSnares
-
-        if not hasRelevantPercussion: 
-            print('Skipping ' + midifile + ' because it has no relevant percussion')
+        total_events = 0
+        for i in relevant_notes:
+            total_events += len(noteOnLists[i])
+            
+        if total_events < 20: 
+            print('Skipping ' + midifile + ' because it has less than 20 relevant percussion events')
         else:
             if not os.path.exists(outpath):
                 os.makedirs(outpath, exist_ok=True)
 
             # sort kicks and snares by time
-            kicks.sort()
-            snares.sort()
-            tempo_changes.sort(key=lambda x: x.at_tick)
 
-            for tickstamps in [kicks, snares]: 
-                tempo = 500000
+            tempo_changes.sort(key=lambda x: x.tick)
+            volume_changes.sort(key=lambda x: x.tick)
+
+            class AudioEvent: 
+                def __init__(self, time, note, volume):
+                    self.time= tick
+                    self.note = note
+                    self.volume = volume
+
+                def toCsvLine(self):
+                    return f'{self.time},{self.note},{self.volume}'
+
+            audio_events = []
+            
+            for note in noteOnLists:
+                noteOnList = noteOnLists[note]
+                noteOnList.sort(key=lambda x: x.tick)
+
                 tcp = 0 # tempo change pointer
+                tempo = 500000 # initial tempo
                 accumulated_time = 0
                 accumulated_ticks = 0
-                for i in range(len(tickstamps)):
-                    tickstamp = tickstamps[i]
-                    while tcp < len(tempo_changes) and tempo_changes[tcp].at_tick <= tickstamp:
-                        accumulated_time += mido.tick2second(tempo_changes[tcp].at_tick - accumulated_ticks, ticks_per_beat, tempo)
-                        accumulated_ticks = tempo_changes[tcp].at_tick
+
+                vcp = 0 # volume change pointer
+                volume = 100 # initial volume
+
+                # add noteOns with same tick
+                i = 0
+                while i < len(noteOnList) - 1:
+                    noteOn = noteOnList[i]
+                    velocity = noteOn.velocity
+                    tick = noteOn.tick
+                    i += 1
+
+                    # aggregate noteOns with same tick
+                    while i < len(noteOnList) and tick == noteOnList[i].tick:
+                        velocity = 1 - ((1 - velocity) * (1 - noteOnList[i].velocity))
+                        i += 1
+
+                    # respect tempo_changes
+                    while tcp < len(tempo_changes) and tempo_changes[tcp].tick <= tick:
+                        accumulated_time += mido.tick2second(tempo_changes[tcp].tick - accumulated_ticks, ticks_per_beat, tempo)
+                        accumulated_ticks = tempo_changes[tcp].tick
                         tempo = tempo_changes[tcp].tempo
                         tcp += 1
-                    tickstamps[i] = accumulated_time + mido.tick2second(tickstamp - accumulated_ticks, ticks_per_beat, tempo)
 
-            # write kick timestamps to a file
-            kicksfile = os.path.join(outpath, 'kicks.txt')
-            with open(kicksfile, 'w') as f:
-                for msg in kicks:
-                    f.write(str(msg) + '\n')
-            # write snare timestamps to a file
-            snaresfile = os.path.join(outpath, 'snares.txt')
-            with open(snaresfile, 'w') as f:
-                for msg in snares:
-                    f.write(str(msg) + '\n')
+                    while vcp < len(volume_changes) and volume_changes[vcp].tick <= tick:
+                        volume = volume_changes[vcp].volume
+                        vcp += 1
+
+                    time = accumulated_time + mido.tick2second(tick - accumulated_ticks, ticks_per_beat, tempo)
+                    volume = (velocity / 127 * 0.5 + 0.5) * volume / 127
+
+                    audio_events.append(AudioEvent(time, note, volume))
+
+            audio_events.sort(key=lambda x: x.time)
+
+            # write audio events to a file
+            audio_events_file = os.path.join(outpath, 'events.txt')
+            with open(audio_events_file, 'w') as f:
+                for event in audio_events:
+                    f.write(event.toCsvLine() + '\n')
 
             for soundfont in soundfonts: 
                 outfile_without_ext = os.path.join(outpath, soundfont.name)
@@ -203,7 +256,7 @@ def generate_song(midifile, outpath, soundfonts):
                         soundfont.path,
                         midifile,
                     ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) # muting errors
-                    max_size = (duration + 10) * sample_rate * channels * bits / 8 
+                    max_size = (duration + 10) * sample_rate * 2 * bits / 8 
                     max_size += 1024 * 1024 # add 1MB to the max size
                     while p.poll() is None:
                         #if outfile exists
@@ -248,7 +301,7 @@ if args.single_file != None:
     generate_song(args.single_file, args.out_path, soundfonts)
     exit(0)
 else: 
-    print('Rendering songs from ' + args.midi_path)
+    print('Rendering songs from ' + args.midi_path + '\n')
     # for every song in every artist dir
     count = 0
     processed_count = 0
@@ -259,8 +312,7 @@ else:
         for song in os.listdir(args.midi_path + '/' + artist):
             if count % (args.skip + 1) == 0: 
                 midifile = args.midi_path + '/' + artist + '/' + song
-                print('\n\n') 
-                print(str(count) + '. processing ' + artist + '/' + song) 
+                print('\n' + str(count) + '. processing ' + artist + '/' + song) 
 
                 songname = song[0:-4]
                 outpath = args.out_path + '/' + artist + '/' + songname + '/'
