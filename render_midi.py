@@ -1,14 +1,20 @@
-import os
-import mido
+"""
+takes midifiles from a folder and renders them to wav using fluidsynth while saving midi events of interest to a csv file
+"""
+import os, sys
 import subprocess
 
 import time
 
 import threading
 
-import argparse 
+import argparse
 
 import traceback
+
+import mido
+
+from audio_event import AudioEvent
 
 from  config import channels, relevant_notes
 
@@ -30,13 +36,13 @@ parser.add_argument('--max-processes', type=int, default=9, help='max processes 
 # parse arguments
 args = parser.parse_args()
 
-if args.out_path == None:
-    if args.single_file != None:
+if args.out_path is None:
+    if args.single_file is not None:
         # get filename
         filename = os.path.basename(args.single_file)
         # remove extension (unknown length after dot)
         extension_start = filename.rfind('.')
-        if(extension_start != -1):
+        if extension_start != -1:
             filename = filename[0:extension_start]
         args.out_path = 'data/rendered_midi/single_songs/' + filename
     else:
@@ -52,8 +58,10 @@ bits = args.bits
 threads = []
 
 def convert_to_ogg(file_without_extension):
-    # convert wav to ogg using ffmpeg in the background
-    try: 
+    """
+    convert wav to ogg using ffmpeg in the background
+    """
+    try:
         command = [
             'ffmpeg',
             '-n', # no overwrite
@@ -65,21 +73,24 @@ def convert_to_ogg(file_without_extension):
             '-ar', str(sample_rate),
             file_without_extension + ".ogg"
         ]
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        output, error = process.communicate()
-        # remove wav
-        if process.returncode == 0:
-            print('Deleting wav after conversion of ' + file_without_extension)
-            os.remove(file_without_extension + ".wav")
-        else: 
-            print('Conversion failed for ' + file_without_extension)
-            print('Output: ' + output.decode('utf-8'))
-            print('Error: ' + error.decode('utf-8'))
-    except Exception as e:
-        print('Exception while converting to ogg: ' + str(e))
+        with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as process:
+            output, error = process.communicate()
+            # remove wav
+            if process.returncode == 0:
+                print('Deleting wav after conversion of ' + file_without_extension)
+                os.remove(file_without_extension + ".wav")
+            else:
+                print('Conversion failed for ' + file_without_extension)
+                print('Output: ' + output.decode('utf-8'))
+                print('Error: ' + error.decode('utf-8'))
+    except Exception as error:
+        print('Exception while converting to ogg: ' + str(error))
         traceback.print_exc()
 
-class Soundfont: 
+class Soundfont:
+    """
+    represents a soundfont
+    """
     def __init__(self, name, path):
         self.name = name
         self.path = path
@@ -97,32 +108,28 @@ for root, dirs, files in os.walk(args.soundfont_path):
             soundfonts.append(Soundfont(name, path))
 
 
-songs_in_process = 0
 start_time = time.time()
-def generate_song(midifile, outpath, soundfonts): 
-    global songs_in_process
-    try: 
+def generate_song(midifile, outpath, soundfonts):
+    try:
         mid = mido.MidiFile(midifile)
         duration = mid.length
 
         print(f'Song length: {duration:.2f} seconds')
-        if mid.length > args.max_song_length: # skip songs longer than 15 minutes. 
+        if mid.length > args.max_song_length: # skip songs longer than 15 minutes.
             print('Skipping song because it is too long: ' + str(mid.length))
-            return 
+            return
 
         print(f'Track count: {len(mid.tracks)}')
 
         # analyze midi file and find all kicks and snares
-        noteOnLists = {}
+        note_on_lists = {}
         for i in relevant_notes:
-            noteOnLists[i] = []
-
-        hasRelevantPercussion = False
+            note_on_lists[i] = []
 
         ticks_per_beat = mid.ticks_per_beat
         print('ticks per beat: ' + str(ticks_per_beat))
 
-        class NoteOnEvent: 
+        class NoteOnEvent:
             def __init__(self, tick, velocity):
                 self.tick = tick
                 self.velocity = velocity
@@ -144,18 +151,16 @@ def generate_song(midifile, outpath, soundfonts):
         for i, track in enumerate(mid.tracks):
             # look for program change to drums
 
-            trackKicks = []
-            trackSnares = []
             ticks = 0
 
             for msg in track:
                 ticks += msg.time
                 if msg.type == 'set_tempo':
                     tempo_changes.append(TempoChange(ticks, msg.tempo))
-                if msg.type == 'note_on': 
+                if msg.type == 'note_on':
                     if msg.channel == 9:
                         if msg.note in relevant_notes:
-                            noteOnLists[msg.note].append(NoteOnEvent(ticks, msg.velocity))
+                            note_on_lists[msg.note].append(NoteOnEvent(ticks, msg.velocity))
                 if msg.type == 'control_change':
                     if msg.channel == 9 and msg.control == 7:
                         volume_changes.append(VolumeChange(ticks, msg.value))
@@ -163,9 +168,9 @@ def generate_song(midifile, outpath, soundfonts):
 
         total_events = 0
         for i in relevant_notes:
-            total_events += len(noteOnLists[i])
-            
-        if total_events < 20: 
+            total_events += len(note_on_lists[i])
+
+        if total_events < 20:
             print('Skipping ' + midifile + ' because it has less than 20 relevant percussion events')
         else:
             if not os.path.exists(outpath):
@@ -176,20 +181,11 @@ def generate_song(midifile, outpath, soundfonts):
             tempo_changes.sort(key=lambda x: x.tick)
             volume_changes.sort(key=lambda x: x.tick)
 
-            class AudioEvent: 
-                def __init__(self, time, note, volume):
-                    self.time= tick
-                    self.note = note
-                    self.volume = volume
-
-                def toCsvLine(self):
-                    return f'{self.time},{self.note},{self.volume}'
-
             audio_events = []
-            
-            for note in noteOnLists:
-                noteOnList = noteOnLists[note]
-                noteOnList.sort(key=lambda x: x.tick)
+
+            for note in note_on_lists:
+                note_on_list = note_on_lists[note]
+                note_on_list.sort(key=lambda x: x.tick)
 
                 tcp = 0 # tempo change pointer
                 tempo = 500000 # initial tempo
@@ -201,15 +197,16 @@ def generate_song(midifile, outpath, soundfonts):
 
                 # add noteOns with same tick
                 i = 0
-                while i < len(noteOnList) - 1:
-                    noteOn = noteOnList[i]
-                    velocity = noteOn.velocity
-                    tick = noteOn.tick
+                while i < len(note_on_list) - 1:
+                    note_on = note_on_list[i]
+                    velocity = note_on.velocity
+                    tick = note_on.tick
                     i += 1
 
                     # aggregate noteOns with same tick
-                    while i < len(noteOnList) and tick == noteOnList[i].tick:
-                        velocity = 1 - ((1 - velocity) * (1 - noteOnList[i].velocity))
+                    while i < len(note_on_list) and tick == note_on_list[i].tick:
+                        note_on = note_on_list[i]
+                        velocity = 1 - ((1 - velocity) * (1 - note.velocity))
                         i += 1
 
                     # respect tempo_changes
@@ -223,29 +220,29 @@ def generate_song(midifile, outpath, soundfonts):
                         volume = volume_changes[vcp].volume
                         vcp += 1
 
-                    time = accumulated_time + mido.tick2second(tick - accumulated_ticks, ticks_per_beat, tempo)
-                    volume = (velocity / 127 * 0.5 + 0.5) * volume / 127
+                    event_time = accumulated_time + mido.tick2second(tick - accumulated_ticks, ticks_per_beat, tempo)
+                    event_volume = (velocity / 127 * 0.5 + 0.5) * volume / 127
 
-                    audio_events.append(AudioEvent(time, note, volume))
+                    audio_events.append(AudioEvent(event_time, note, event_volume))
 
             audio_events.sort(key=lambda x: x.time)
 
             # write audio events to a file
-            audio_events_file = os.path.join(outpath, 'events.txt')
-            with open(audio_events_file, 'w') as f:
+            events_file_path = os.path.join(outpath, 'events.csv')
+            with open(events_file_path, 'w', encoding='utf-8') as event_file:
                 for event in audio_events:
-                    f.write(event.toCsvLine() + '\n')
+                    event_file.write(event.to_csv_line() + '\n')
 
             for soundfont in soundfonts: 
                 outfile_without_ext = os.path.join(outpath, soundfont.name)
                 outfile = outfile_without_ext + '.wav'
 
-                # check if file already exists 
+                # check if file already exists
                 if not args.override and os.path.exists(outfile_without_ext + '.ogg'):
                     print('Skipping ' + outfile + ' because it already exists')
-                else: 
+                else:
                     print('Rendering midi using soundfont ' + soundfont.name)
-                    p = subprocess.Popen([
+                    command = [
                         'fluidsynth',
                         '-F', outfile, 
                         '-ni', 
@@ -255,31 +252,32 @@ def generate_song(midifile, outpath, soundfonts):
                         '-r', str(sample_rate),
                         soundfont.path,
                         midifile,
-                    ], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) # muting errors
-                    max_size = (duration + 10) * sample_rate * 2 * bits / 8 
-                    max_size += 1024 * 1024 # add 1MB to the max size
-                    while p.poll() is None:
-                        #if outfile exists
-                        if os.path.exists(outfile): 
-                            if os.stat(outfile).st_size > max_size:
-                                print('File size bigger than expected, possibly a corrupt midi file')
-                                print('Stopping fluidsynth...')
-                                p.kill()
-                                p.wait()
-                                # remove file
-                                print('Removing file')
-                                os.remove(outfile)
-                                raise Exception('File size bigger than expected, possibly a corrupt midi file')
+                    ]
+                    with subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
+                        max_size = (duration + 10) * sample_rate * 2 * bits / 8 
+                        max_size += 1024 * 1024 # add 1MB to the max size
+                        while process.poll() is None:
+                            #if outfile exists
+                            if os.path.exists(outfile): 
+                                if os.stat(outfile).st_size > max_size:
+                                    print('File size bigger than expected, possibly a corrupt midi file')
+                                    print('Stopping fluidsynth...')
+                                    process.kill()
+                                    process.wait()
+                                    # remove file
+                                    print('Removing file')
+                                    os.remove(outfile)
+                                    raise Exception('File size bigger than expected, possibly a corrupt midi file')
 
-                    # p.wait() # equivalent of 'while p.poll() is None'?
+                        # p.wait() # equivalent of 'while p.poll() is None'?
 
-                    if p.returncode != 0:
-                        print('Fluidsynth returned non-zero exit code')
-                        os.remove(outfile) # if an error occured, it's better to remove the file
-                        raise Exception('Fluidsynth returned non-zero exit code')
-                    else: 
+                        if process.returncode != 0:
+                            print('Fluidsynth returned non-zero exit code')
+                            os.remove(outfile) # if an error occured, it's better to remove the file
+                            raise Exception('Fluidsynth returned non-zero exit code')
+
                         print('Converting wav to ogg in background')
-                        try: 
+                        try:
                             thread = threading.Thread(target=convert_to_ogg, args=(outfile_without_ext,))
                             thread.start()
                             threads.append(thread)
@@ -287,20 +285,18 @@ def generate_song(midifile, outpath, soundfonts):
                                 threads[0].join()
                                 threads.pop(0)
 
-                            songs_in_process += 1
+                        except Exception as error:
+                            print('Error converting to ogg', str(error))
 
-                        except Exception as e:
-                            print('Error converting to ogg', str(e))
-
-    except Exception as e:
+    except Exception as error:
         print('Error processing ' + midifile)
-        print(str(e))
+        print(str(error))
 
-if args.single_file != None:
+if args.single_file is not None:
     print('Rendering single song' + args.single_file)
     generate_song(args.single_file, args.out_path, soundfonts)
-    exit(0)
-else: 
+    sys.exit(0)
+else:
     print('Rendering songs from ' + args.midi_path + '\n')
     # for every song in every artist dir
     count = 0
@@ -310,9 +306,9 @@ else:
         if not os.path.isdir(args.midi_path + '/' + artist):
             continue
         for song in os.listdir(args.midi_path + '/' + artist):
-            if count % (args.skip + 1) == 0: 
+            if count % (args.skip + 1) == 0:
                 midifile = args.midi_path + '/' + artist + '/' + song
-                print('\n' + str(count) + '. processing ' + artist + '/' + song) 
+                print('\n' + str(count) + '. processing ' + artist + '/' + song)
 
                 songname = song[0:-4]
                 outpath = args.out_path + '/' + artist + '/' + songname + '/'
@@ -320,13 +316,12 @@ else:
                 soundfont = soundfonts[processed_count % len(soundfonts)]
 
                 generate_song(midifile, outpath, [soundfont])
-                
                 processed_count += 1
 
             count += 1
-            
+
 # wait for all threads to finish
 for thread in threads:
     thread.join()
 
-print('Finished rendering ' + str(songs_in_process) + ' songs in ' + str(time.time() - start_time) + ' seconds')
+print('Finished in ' + str(time.time() - start_time) + ' seconds')
