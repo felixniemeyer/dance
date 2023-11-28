@@ -9,7 +9,7 @@ import numpy as np
 from dance_data import loadEventsAsLabels
 from results_plotter import ResultsPlotter
 
-from config import frame_size, samplerate 
+from config import frame_size, samplerate
 
 parser = argparse.ArgumentParser(
     'audio and timestamps viewer',
@@ -28,14 +28,14 @@ if args.audiofile.endswith('.ogg'):
 audiofile = args.audiofile + '.ogg'
 
 if len(args.eventfile) == 0:
-    args.eventfile = [args.audiofile + '.events']
+    audio_file_dir = os.path.dirname(audiofile)
+    args.eventfile = [os.path.join(audio_file_dir, 'events.csv')]
 
 audio_data, file_samplerate = sf.read(audiofile)
 
 assert samplerate == file_samplerate, "sample rate mismatch. Project wide setting is " + str(samplerate) + ", but file has " + str(file_samplerate) + " samples per second"
 
-plotter = ResultsPlotter(frame_size, samplerate)
-plotter.plot_wav(audio_data)
+plotter = ResultsPlotter(audio_data, frame_size, samplerate)
 
 frame_count = audio_data.shape[0] // frame_size
 
