@@ -1,5 +1,5 @@
 import torch.nn as nn
-from config import buffer_size
+from config import frame_size
 
 class CNNOnly(nn.Module):
     def __init__(self):
@@ -31,7 +31,7 @@ class CNNOnly(nn.Module):
 
         self.conv_layers = nn.Sequential(*layers)
 
-        self.post_cnn_size = buffer_size * previous_feature_size // (pool_size) ** cnn_layers
+        self.post_cnn_size = frame_size * previous_feature_size // (pool_size) ** cnn_layers
 
         self.finalLayer = nn.Sequential(
             nn.Linear(in_features=self.post_cnn_size, out_features=self.post_cnn_size // 2),
@@ -41,8 +41,8 @@ class CNNOnly(nn.Module):
         )
 
     def forward(self, batch_inputs, state=None):  # takes a batch of sequences
-        buffers = batch_inputs.view(-1, 1, buffer_size)
-        cnn_outputs = self.conv_layers(buffers)
+        frames = batch_inputs.view(-1, 1, frame_size)
+        cnn_outputs = self.conv_layers(frames)
         cnn_outputs = cnn_outputs.view(batch_inputs.shape[0], batch_inputs.shape[1], self.post_cnn_size) # batch id, sequence id, buffer id, feature id
         return self.finalLayer(cnn_outputs), state
 

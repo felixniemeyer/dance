@@ -45,9 +45,9 @@ audio = audio.mean(0)
 print('input audio shape:', audio.shape) 
 
 lenght = len(audio)
-buffers_in_file = lenght // config.buffer_size
-offset = lenght % config.buffer_size
-buffer_duration = config.buffer_size / samplerate
+frames_in_file = lenght // config.frame_size
+offset = lenght % config.frame_size
+frame_duration = config.frame_size / samplerate
 
 # Initialize the model
 device = torch.device(args.device_type)
@@ -58,12 +58,12 @@ model.to(device)
 
 print('analyzing audio file...')
 with open(kicksfile, 'w') as kf, open(snaresfile, 'w') as sf:
-    for i in range(buffers_in_file):
-        start = offset + i * config.buffer_size
-        end = start + config.buffer_size
-        buffer = audio[start:end]
+    for i in range(frames_in_file):
+        start = offset + i * config.frame_size
+        end = start + config.frame_size
+        frame = audio[start:end]
 
-        sequence = buffer.unsqueeze(0)
+        sequence = frame.unsqueeze(0)
         batch = sequence.unsqueeze(0)
 
         model_input = batch.to(device)
@@ -76,7 +76,7 @@ with open(kicksfile, 'w') as kf, open(snaresfile, 'w') as sf:
         sf.write(str(labels[1].item()) + '\n')
 
         if i % 100 == 0:
-            print(f"\r{i}/{buffers_in_file} ({i/buffers_in_file*100:.2f}%)", end="\r")
+            print(f"\r{i}/{frames_in_file} ({i/frames_in_file*100:.2f}%)", end="\r")
 
-print(f'{buffers_in_file}/{buffers_in_file} (100.00%), done.')
+print(f'{frames_in_file}/{frames_in_file} (100.00%), done.')
 

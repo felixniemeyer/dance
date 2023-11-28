@@ -6,18 +6,19 @@ import soundfile as sf
 
 import numpy as np
 
+from dance_data import loadEventsAsLabels
 from results_plotter import ResultsPlotter
 
-from config import buffer_size, samplerate 
+from config import frame_size, samplerate
 
 parser = argparse.ArgumentParser(
     'audio and timestamps viewer',
     'View an audio file and its kicks and snares presences', 
-) 
+)
 
 parser.add_argument('audiofile', help='The audiofile to open. A kick_presence and snare_presence file is expected to be in the same directory.', type=str)
 # support any number of kicks and snares files
-parser.add_argument('eventfiles', nargs="*", help='The eventfiles to open. Default: <af>.kick_presence and <af>.snare_presence where <af> is the audio file name.', type=str)
+parser.add_argument('eventfile', nargs="*", help='The eventfile to open. Default: <af>.events', type=str)
 
 args = parser.parse_args()
 
@@ -26,33 +27,28 @@ if args.audiofile.endswith('.ogg'):
     args.audiofile = args.audiofile[:-4]
 audiofile = args.audiofile + '.ogg'
 
-eventfiles = {}
-if len(args.eventfiles) == 0:
-    eventfiles["kicks"] = args.audiofile + '.kick_presence'
-    eventfiles["snares"] = args.audiofile + '.snare_presence'
-else:
-    for eventfile in args.eventfiles:
-        basename = os.path.basename(eventfile)
-        eventfiles[basename] = eventfile
+if len(args.eventfile) == 0:
+    audio_file_dir = os.path.dirname(audiofile)
+    args.eventfile = [os.path.join(audio_file_dir, 'events.csv')]
 
-audio_data, samplerate = sf.read(audiofile) 
+audio_data, file_samplerate = sf.read(audiofile)
 
-assert samplerate == samplerate, "sample rate mismatch. Project wide setting is " + str(samplerate) + ", but file has " + str(samplerate) + " samples per second"
+assert samplerate == file_samplerate, "sample rate mismatch. Project wide setting is " + str(samplerate) + ", but file has " + str(file_samplerate) + " samples per second"
 
-# average all channels
-audio_data = np.mean(audio_data, axis=1)
+plotter = ResultsPlotter(audio_data, frame_size, samplerate)
 
-plotter = ResultsPlotter(buffer_size, samplerate)
-plotter.plot_wav(audio_data)
+frame_count = audio_data.shape[0] // frame_size
 
-for name, eventfile in eventfiles.items():
-    event_presence = []
-    # Mark kicks on the time axis
-    with open(eventfile, 'r') as file:
-        for line in file: 
-            event_presence.append(float(line))
-    # make random color
+just_one = len(args.eventfile) == 1
+
+for eventfile in args.eventfile:
+    labels = loadEventsAsLabels(eventfile, frame_count, samplerate, frame_size)
+    print(labels.shape)
+
+    # swap dimensions
+    labels = np.swapaxes(labels, 0, 1)
+
     color = np.random.rand(3,)
-    plotter.plot_events(event_presence, name, color)
+    plotter.plot_event_group(eventfile, labels, ['kicks', 'snares'], ['red', 'green'], 0.01, just_one)
 
 plotter.finish()

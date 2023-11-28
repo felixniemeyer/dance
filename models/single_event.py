@@ -1,5 +1,5 @@
 import torch.nn as nn
-from config import buffer_size
+from config import frame_size
 
 class SingleEvent(nn.Module):
     def __init__(self):
@@ -8,7 +8,7 @@ class SingleEvent(nn.Module):
         rnn_layers=4
 
         self.rnn = nn.RNN(
-            input_size=buffer_size,
+            input_size=frame_size,
             hidden_size=hidden_size,
             num_layers=rnn_layers,
         )

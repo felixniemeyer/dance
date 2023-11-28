@@ -25,7 +25,7 @@
 
 	- D: save and load meta params from checkpoint
 
-	- make buffer size a meta parameter
+	- make frame size a meta parameter
 
 	- D: allow provision of additional parameters (e.g. data size limitation for testing)
 

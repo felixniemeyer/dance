@@ -1,5 +1,5 @@
 import torch.nn as nn
-from config import buffer_size
+from config import frame_size
 
 class CNNAndRNN(nn.Module):
     def __init__(self, ):
@@ -35,7 +35,7 @@ class CNNAndRNN(nn.Module):
 
         self.conv_layers = nn.Sequential(*layers)
 
-        self.post_cnn_size = buffer_size // pool_size ** cnn_layers * previous_feature_size
+        self.post_cnn_size = frame_size // pool_size ** cnn_layers * previous_feature_size
 
         self.rnn = nn.RNN(
             input_size=self.post_cnn_size,
@@ -53,8 +53,8 @@ class CNNAndRNN(nn.Module):
         )
 
     def forward(self, batch_inputs, state=None):  # takes a batch of sequences
-        buffers = batch_inputs.view(-1, 1, buffer_size)
-        cnn_outputs = self.conv_layers(buffers)
+        frames = batch_inputs.view(-1, 1, frame_size)
+        cnn_outputs = self.conv_layers(frames)
         cnn_outputs = cnn_outputs.view(batch_inputs.shape[0], batch_inputs.shape[1], self.post_cnn_size) # batch id, sequence id, buffer id, feature id
         x, new_state = self.rnn(cnn_outputs, state)
         return self.finalLayer(x), new_state
