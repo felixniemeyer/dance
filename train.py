@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+import subprocess
+
 from dance_data import DanceDataset
 
 from models.selector import getModelClass, loadModel, getModels, saveModel 
@@ -33,7 +35,7 @@ parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Cu
 
 # hyperparameters
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
-parser.add_argument("-r", "--learning-rate", type=float, default=3e-5, help="learning rate")
+parser.add_argument("-r", "--learning-rate", type=float, default=1e-5, help="learning rate")
 parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.9, help="learning rate decay")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 parser.add_argument("-w", "--add-weight", type=float, default=2, help="additional weight for frames with audio events loss")
@@ -116,11 +118,11 @@ model_class = getModelClass(args.model)
 model = model_class().to(device)
 
 if args.continue_from is not None:
-    args.continue_from_path = f"{args.checkpoints_path}/{args.tag}/{args.continue_from}.pt"
+    args.continue_from_file = f"{args.checkpoints_path}/{args.tag}/{args.continue_from}.pt"
 
-if args.continue_from_path is not None:
+if args.continue_from_file is not None:
     try: 
-        model, obj = loadModel(args.continue_from_path)
+        model, obj = loadModel(args.continue_from_file)
         model.to(device)
 
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
@@ -139,6 +141,7 @@ else:
 scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.learning_rate_decay, last_epoch=-1)
 
 last_epoch = first_epoch + args.num_epochs
+
 
 class CustomLoss(nn.Module):
     def __init__(self, relative_offset):
@@ -167,7 +170,7 @@ class CustomLoss(nn.Module):
 
 criterion = CustomLoss(0.1)
 
-avg_loss = 0
+avg_loss_sum = 0
 toal_time = 0
 
 forward_time = 0
@@ -243,7 +246,7 @@ for epoch in range(first_epoch, last_epoch):
             total_loss += loss
             total_batches += 1
             
-        avg_loss += total_loss / total_batches
+        avg_loss_sum += total_loss / total_batches
         print()
         print(f"Validation loss: {loss:.4f}")
 
@@ -264,6 +267,9 @@ for epoch in range(first_epoch, last_epoch):
                 'continued_from': args.continue_from,
             }
         })
+    # append loss to log file
+    with open(f"{save_path}loss.csv", 'a') as f:
+        f.write(f"{epoch_1},{loss}\n")
 
 print(f"\nTotal training time: {toal_time:.2f} seconds")
 print(f"Total forward pass time: {forward_time:.2f} seconds ({forward_time / toal_time * 100:.2f}%)")
@@ -273,6 +279,9 @@ print(f"Total to device time: {to_device_time:.2f} seconds ({to_device_time / to
 
 epoch_count = last_epoch - first_epoch
 print(f"\nAverage time per epoch: {toal_time / epoch_count:.2f} seconds")
-print(f"\nAverage validation loss: {avg_loss / epoch_count:.4f}")
+print(f"\nAverage validation loss: {avg_loss_sum / epoch_count:.4f}")
 print(f"Final validation loss: {loss:.4f}")
 
+print('plot loss? (y/n)')
+if input() == 'y':
+    subprocess.run(['python', 'plot_loss.py', f"{save_path}loss.csv"])

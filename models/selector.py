@@ -12,6 +12,7 @@ from .v2_funnel import V2Funnel
 from .v2_small import V2Small
 from .v2_large import V2Large
 from .v2_extra_large import V2ExtraLarge 
+from .v2_coolio import V2Coolio
 
 models = {
     'cnn_only': CNNOnly,
@@ -26,7 +27,8 @@ models = {
     'v2_funnel': V2Funnel, 
     'v2_small': V2Small,
     'v2_large': V2Large, 
-    'v2_extra_large': V2ExtraLarge
+    'v2_extra_large': V2ExtraLarge, 
+    'v2_coolio': V2Coolio
 }
 
 def getModels():
