@@ -4,11 +4,11 @@ from config import buffer_size
 class CNNOnly(nn.Module):
     def __init__(self):
         super(CNNOnly, self).__init__()
-        cnn_layers=3
+        cnn_layers=6
         pool_size = 2
 
         previous_feature_size = 1
-        feature_size = 8
+        feature_size = 32
 
         layers = []
         for _ in range(cnn_layers):
@@ -40,9 +40,9 @@ class CNNOnly(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, batch_inputs):  # takes a batch of sequences
+    def forward(self, batch_inputs, state=None):  # takes a batch of sequences
         buffers = batch_inputs.view(-1, 1, buffer_size)
         cnn_outputs = self.conv_layers(buffers)
         cnn_outputs = cnn_outputs.view(batch_inputs.shape[0], batch_inputs.shape[1], self.post_cnn_size) # batch id, sequence id, buffer id, feature id
-        return self.finalLayer(cnn_outputs)
+        return self.finalLayer(cnn_outputs), state
 

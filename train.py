@@ -35,7 +35,7 @@ parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Cu
 
 # hyperparameters
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
-parser.add_argument("-r", "--learning-rate", type=float, default=1e-5, help="learning rate")
+parser.add_argument("-r", "--learning-rate", type=float, default=1e-4, help="learning rate")
 parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.9, help="learning rate decay")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 parser.add_argument("-w", "--add-weight", type=float, default=2, help="additional weight for frames with audio events loss")
@@ -46,6 +46,7 @@ parser.add_argument("--audio-event-half-life", type=float, default=0.02, help="h
 # misc
 parser.add_argument("-d", "--dataset-size", type=int, default=None, help="truncate dataset to this size. For test runs.")
 parser.add_argument("--summarize", action='store_true', help="don't log, show only summary at the end")
+parser.add_argument("--plot-loss", action='store_true', default=False, help="plot loss after training")
 
 args = parser.parse_args()
 
@@ -282,6 +283,5 @@ print(f"\nAverage time per epoch: {toal_time / epoch_count:.2f} seconds")
 print(f"\nAverage validation loss: {avg_loss_sum / epoch_count:.4f}")
 print(f"Final validation loss: {loss:.4f}")
 
-print('plot loss? (y/n)')
-if input() == 'y':
+if args.plot_loss:
     subprocess.run(['python', 'plot_loss.py', f"{save_path}loss.csv"])

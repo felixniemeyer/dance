@@ -1,3 +1,5 @@
+import os 
+
 import numpy as np
 import argparse
 import subprocess
@@ -8,11 +10,13 @@ from config import samplerate, buffer_size
 from models.selector import loadModel
 
 parser = argparse.ArgumentParser()
+parser.add_argument("path", type=str, help="common path to all checkpoints")
 parser.add_argument("checkpoints", nargs="*", type=str, help="Checkpoints")
+parser.add_argument("-p", "--dataset-path", type=str, default="data/chunks/lakh_clean", help="path to dataset")
 parser.add_argument("-d", "--device-type", type=str, default="cpu", help="device type (cpu or cuda)")
 args = parser.parse_args()
 
-ds = DanceDataset("data/chunks/lakh_clean", buffer_size, samplerate)
+ds = DanceDataset(args.dataset_path, buffer_size, samplerate)
 
 while True:
     i = np.random.randint(0, len(ds))
@@ -29,7 +33,9 @@ while True:
     plotter.plot_event_group('ground truth', labels.numpy().T, ['kicks', 'snares'], ['red', 'green'], is_ground_truth=True)
 
     for checkpoint in args.checkpoints:
-        model, obj = loadModel(checkpoint)
+        # join path
+        cpp = os.path.join(args.path, checkpoint)
+        model, obj = loadModel(cpp)
         model.to(args.device_type)
 
         state = None

@@ -39,9 +39,9 @@ class Rnn2FDropout(nn.Module):
                 nn.Sigmoid(),
             ))
 
-    def forward(self, batch_inputs):  # takes a batch of sequences
-        x, _ = self.rnn(batch_inputs)
+    def forward(self, batch_inputs, state=None):  # takes a batch of sequences
+        x, new_state = self.rnn(batch_inputs, state)
         is_kick = self.funnels[0](x)
         is_snare = self.funnels[1](x)
-        return torch.cat((is_kick, is_snare), dim=2)
+        return torch.cat((is_kick, is_snare), dim=2), new_state
 

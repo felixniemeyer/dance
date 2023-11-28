@@ -27,11 +27,10 @@ if not os.path.exists(logdir):
     os.makedirs(logdir)
 
 # parameter sets
-learning_rates = [0.001, 0.01]
-loss_functions = ['mse', 'smoothl1', 'bcew']
+learning_rates = [0.0001, 0.001]
 models = getModels()
 
-variation_count = len(learning_rates) * len(loss_functions) * len(models)
+variation_count = len(learning_rates) * len(models)
 
 print(f"Training params forwarded to the train script: {args.train_parameters}")
 print(f"Running {variation_count} variations. Ok?")
@@ -46,29 +45,27 @@ start_time = time.time()
 
 # run
 for learning_rate in learning_rates:
-    for loss_function in loss_functions:
-        for model in models:
-            variation = f"model-m{model}_lr-{learning_rate}_loss-{loss_function}"
+    for model in models:
+        variation = f"model-{model}_lr-{learning_rate}"
 
-            cmd = f"python train.py {model} "
+        cmd = f"python train.py {model} "
 
-            cmd += f"--learning-rate {learning_rate} "
-            cmd += f"--loss-function {loss_function} "
+        cmd += f"--learning-rate {learning_rate} "
 
-            cmd += f"--checkpoints-path '{args.checkpoints_directory}/{args.name}' "
-            cmd += f"--tag {variation} "
-            
-            cmd += f"--summarize "
+        cmd += f"--checkpoints-path '{args.checkpoints_directory}/{args.name}' "
+        cmd += f"--tag {variation} "
+        
+        cmd += f"--summarize "
 
-            cmd += args.train_parameters
+        cmd += args.train_parameters
 
-            print(cmd)
+        print(cmd)
 
-            # write output of train.py to a file
-            cmd += f" > '{logdir}/{variation}.txt'"
+        # write output of train.py to a file
+        cmd += f" > '{logdir}/{variation}.txt'"
 
-            # run the command
-            os.system(cmd)
+        # run the command
+        os.system(cmd)
 
 end_time = time.time()
 print(f"Total time: {end_time - start_time} seconds")

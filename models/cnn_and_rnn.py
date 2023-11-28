@@ -5,7 +5,7 @@ class CNNAndRNN(nn.Module):
     def __init__(self, ):
         super(CNNAndRNN, self).__init__()
         cnn_layers=3
-        cnn_first_layer_feature_size=4
+        cnn_first_layer_feature_size=32
         rnn_hidden_size=64
         rnn_layers=2
         rnn_dropout=0
@@ -52,10 +52,10 @@ class CNNAndRNN(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, batch_inputs):  # takes a batch of sequences
+    def forward(self, batch_inputs, state=None):  # takes a batch of sequences
         buffers = batch_inputs.view(-1, 1, buffer_size)
         cnn_outputs = self.conv_layers(buffers)
         cnn_outputs = cnn_outputs.view(batch_inputs.shape[0], batch_inputs.shape[1], self.post_cnn_size) # batch id, sequence id, buffer id, feature id
-        x, _ = self.rnn(cnn_outputs)
-        return self.finalLayer(x)
+        x, new_state = self.rnn(cnn_outputs, state)
+        return self.finalLayer(x), new_state
 

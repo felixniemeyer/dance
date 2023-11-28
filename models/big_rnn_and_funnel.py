@@ -11,7 +11,6 @@ class BigRNNAndFunnel(nn.Module):
             input_size=buffer_size,
             hidden_size=hidden_size,
             num_layers=rnn_layers,
-        #    nonlinearity='relu',
         )
 
         previous_neurons = hidden_size
@@ -33,8 +32,8 @@ class BigRNNAndFunnel(nn.Module):
             nn.Sigmoid(),
         )
 
-    def forward(self, batch_inputs):  # takes a batch of sequences
-        x, _ = self.rnn(batch_inputs)
+    def forward(self, batch_inputs, state=None):  # takes a batch of sequences
+        x, new_state = self.rnn(batch_inputs, state)
         y = self.finalLayer(x)
-        return y
+        return y, new_state
 

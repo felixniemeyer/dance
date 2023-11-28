@@ -38,10 +38,13 @@ class SeparateLanes(nn.Module):
                 nn.Sigmoid(),
             ))
 
-    def forward(self, batch_inputs):  # takes a batch of sequences
+    def forward(self, batch_inputs, state = None):  # takes a batch of sequences
         predicted = []
+        new_state = []
         for i in range(self.events):
-            x, _ = self.rnns[i](batch_inputs)
+            substate = None if state is None else state[i]
+            x, new_substate = self.rnns[i](batch_inputs, substate)
+            new_state.append(new_substate)
             predicted.append(self.funnels[i](x))
-        return torch.cat(predicted, dim=2)
+        return torch.cat(predicted, dim=2), new_state
 

@@ -1,4 +1,3 @@
-import torch
 import torch.nn as nn
 from config import buffer_size
 
@@ -33,8 +32,8 @@ class SingleEvent(nn.Module):
             nn.Sigmoid(),
         )
 
-    def forward(self, batch_inputs):  # takes a batch of sequences
-        x, _ = self.rnn(batch_inputs)
+    def forward(self, batch_inputs, state=None):  # takes a batch of sequences
+        x, new_state = self.rnn(batch_inputs, state)
         is_snare = self.funnel(x)
-        return is_snare
+        return is_snare, new_state
 
