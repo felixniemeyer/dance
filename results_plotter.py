@@ -31,8 +31,7 @@ class ResultsPlotter:
         ax.set_title(self.title)
         ax.plot(time, waveform, color='black', linewidth=0.1)
 
-        ax.set_xlabel('Time [s]')
-        ax.set_ylabel('Waveform amplitude')
+        self.axes[-1].set_xlabel('Time [s]')
 
         self.axis_index = 1
 
@@ -52,8 +51,7 @@ class ResultsPlotter:
                 raise Exception("You have already plotted the maximum number of models")
             ax = self.axes[self.axis_index]
             self.axis_index += 1
-
-        ax.set_ylabel(name)
+            ax.set_title(name)
 
         for i, event_name in enumerate(event_names):
             self.plot_event(values[i], event_name, colors[i], threshold, ax)

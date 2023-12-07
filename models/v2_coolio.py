@@ -1,5 +1,5 @@
 import torch.nn as nn
-from config import buffer_size
+from config import frame_size 
 
 class V2Coolio(nn.Module):
     def __init__(self):
@@ -21,7 +21,7 @@ class V2Coolio(nn.Module):
             nn.Dropout(0.5),
         )
 
-        self.interface_size = buffer_size * 16
+        self.interface_size = frame_size * 16
 
         hidden_size=64
 
@@ -41,9 +41,9 @@ class V2Coolio(nn.Module):
         )
 
     def forward(self, batch_inputs, state = None):  # takes a batch of sequences
-        batch_size, seq_len, buffer_size = batch_inputs.size()
+        batch_size, seq_len, frame_size = batch_inputs.size()
 
-        reshaped_for_cnn = batch_inputs.view(-1, 1, buffer_size)
+        reshaped_for_cnn = batch_inputs.view(-1, 1, frame_size)
 
         cnn_output = self.features(reshaped_for_cnn)
 

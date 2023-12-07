@@ -27,8 +27,8 @@ if not os.path.exists(logdir):
     os.makedirs(logdir)
 
 # parameter sets
-learning_rates = [0.0001, 0.001]
-models = getModels()
+learning_rates = [0.0005, 0.00005] # [0.0001, 0.001]
+models = ["cnn_and_rnn", "cnn_only", "rnn_only"]
 
 variation_count = len(learning_rates) * len(models)
 

@@ -26,6 +26,8 @@ def loadEventsAsLabels(events_file_path, number_of_frames, samplerate, frame_siz
             event = AudioEvent.from_csv_line(line)
             if event.note in mapping:
                 frame = math.floor(event.time * samplerate / frame_size)
+                if(frame >= number_of_frames):
+                    continue
                 group = mapping[event.note]
                 labels[frame][group] = 1 - ((1 - labels[frame][group]) * (1 - event.volume))
 
