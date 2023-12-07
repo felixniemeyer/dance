@@ -154,7 +154,10 @@ for artist in os.listdir(args.in_path):
                     while event_pointer < len(events) and events[event_pointer].time <= end_time:
                         event = events[event_pointer]
                         time = (event.time - start_time) / pitch
-                        f.write(f"{time:.4f},{event.note},{event.volume:.4f}\n")
+                        if event.volume < 0:
+                            print('Volume < 0. Skipping event.')
+                        else:
+                            f.write(f"{time:.4f},{event.note},{event.volume:.4f}\n")
                         event_pointer += 1
 
                 newrate = args.sample_rate * pitch

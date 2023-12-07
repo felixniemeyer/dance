@@ -1,23 +1,28 @@
-import os 
+"""
+Train a model on the given dataset.
+"""
+
+import os
+import sys
 import time
+
+import argparse
+import re
+
+import subprocess
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
-import subprocess
+from torch.utils.data import DataLoader, random_split
 
 from dance_data import DanceDataset
 
 from models.selector import getModelClass, loadModel, getModels, saveModel
 
-from torch.utils.data import DataLoader, random_split
-
 import config
 
-import argparse
-
-import re
 
 parser = argparse.ArgumentParser()
 
@@ -48,6 +53,8 @@ parser.add_argument("-d", "--dataset-size", type=int, default=None, help="trunca
 parser.add_argument("--summarize", action='store_true', help="don't log, show only summary at the end")
 parser.add_argument("--plot-loss", action='store_true', default=False, help="plot loss after training")
 
+parser.add_argument("--onnx", action='store_true', help="export model to onnx. Stored alongside checkpoints.")
+
 args = parser.parse_args()
 
 relative_offset = 0.2
@@ -55,20 +62,19 @@ relative_offset = 0.2
 
 if args.tag is None:
     os.system('git log --decorate -n 1 > .git_tag.txt~')
-    try: 
-        with open('.git_tag.txt~', 'r') as f:
+    try:
+        with open('.git_tag.txt~', 'r', encoding='utf8') as f:
             line = f.readline()
             match = re.search(r'\(HEAD.*tag: (.*?),', line)
             if match is None:
                 raise Exception('no git tag found')
-            else: 
-                tag = match.group(1)
-                print('using git tag:', args.tag)
-                args.tag = tag
+            tag = match.group(1)
+            print('using git tag:', args.tag)
+            args.tag = tag
     except Exception as e:
         print(e)
         print('Either provide tag by -t or create a git tag')
-        exit(0)
+        sys.exit(0)
     finally:
         os.remove('.git_tag.txt~')
 
@@ -90,7 +96,7 @@ dataset = DanceDataset(args.chunks_path, config.frame_size, config.samplerate)
 print('dataset size: ', len(dataset))
 print()
 
-data_size = len(dataset) 
+data_size = len(dataset)
 if args.dataset_size is not None:
     if args.dataset_size > data_size:
         print('dataset size is smaller than requested size')
@@ -122,7 +128,7 @@ if args.continue_from is not None:
     args.continue_from_file = f"{args.checkpoints_path}/{args.tag}/{args.continue_from}.pt"
 
 if args.continue_from_file is not None:
-    try: 
+    try:
         model, obj = loadModel(args.continue_from_file)
         model.to(device)
 
@@ -133,12 +139,12 @@ if args.continue_from_file is not None:
         print('loaded checkpoint from', args.continue_from)
     except FileNotFoundError:
         print('no checkpoint found at', args.continue_from)
-        exit()
-else: 
+        sys.exit()
+else:
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 
 
-# scale down learning rate to 0.1 from initial value after 
+# scale down learning rate to 0.1 from initial value after
 scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.learning_rate_decay, last_epoch=-1)
 
 last_epoch = first_epoch + args.num_epochs
@@ -146,10 +152,10 @@ last_epoch = first_epoch + args.num_epochs
 
 class CustomLoss(nn.Module):
     def __init__(self, relative_offset):
-        super(CustomLoss, self).__init__()
+        super().__init__()
         self.relative_offset = relative_offset
         self.criterion = nn.CrossEntropyLoss()
-        self.boost = args.add_weight 
+        self.boost = args.add_weight
 
     def forward(self, full_predictions, full_labels):
         tfs = int(full_labels.shape[1] * self.relative_offset)
@@ -161,11 +167,11 @@ class CustomLoss(nn.Module):
 
         # weights = (max of elements of last dimension) * 9 + 1
         weights = torch.max(labels, dim=2)[0] * self.boost + 1
-        
+
         # Apply weights to the binary cross-entropy loss for each output dimension
         loss_1 = nn.functional.binary_cross_entropy(predictions[:, :, 0], labels[:, :, 0], weight=weights)
-        loss_2 = nn.functional.binary_cross_entropy(predictions[:, :, 1], labels[:, :, 1], weight=weights) 
-        
+        loss_2 = nn.functional.binary_cross_entropy(predictions[:, :, 1], labels[:, :, 1], weight=weights)
+
         # Return the mean loss
         return (loss_1 + loss_2) / 2.0  # You can adjust this based on your preference
 
@@ -193,7 +199,8 @@ for epoch in range(first_epoch, last_epoch):
 
     for i, (batch_inputs, batch_labels, _) in enumerate(train_loader):
 
-        if not args.summarize: print('\rbatch', i + 1, 'of', (train_size - 1) // batch_size + 1, end='\r', flush=True)
+        if not args.summarize:
+            print('\rbatch', i + 1, 'of', (train_size - 1) // batch_size + 1, end='\r', flush=True)
 
         start_calc = time.time()
         batch_inputs, batch_labels = batch_inputs.to(device), batch_labels.to(device)
@@ -233,7 +240,8 @@ for epoch in range(first_epoch, last_epoch):
 
         for i, (val_inputs, val_labels, _) in enumerate(val_loader):
 
-            if not args.summarize: print('\rbatch', i + 1, 'of', (val_size - 1) // batch_size + 1, end='\r', flush=True)
+            if not args.summarize:
+                print('\rbatch', i + 1, 'of', (val_size - 1) // batch_size + 1, end='\r', flush=True)
 
             val_inputs, val_labels = val_inputs.to(device), val_labels.to(device)
 
@@ -246,17 +254,18 @@ for epoch in range(first_epoch, last_epoch):
             # Compute accuracy
             total_loss += loss
             total_batches += 1
-            
+
         avg_loss_sum += total_loss / total_batches
         print()
         print(f"Validation loss: {loss:.4f}")
 
     epoch_duration = time.time() - start_time
     toal_time += epoch_duration
-    if not args.summarize: print(f"Epoch duration: {epoch_duration:.2f} seconds")
+    if not args.summarize:
+        print(f"Epoch duration: {epoch_duration:.2f} seconds")
 
     epoch_1 = epoch + 1
-    if (args.checkpoint_interval != None and (epoch_1 - first_epoch) % args.checkpoint_interval == 0) or epoch_1 == last_epoch: 
+    if (args.checkpoint_interval is not None and (epoch_1 - first_epoch) % args.checkpoint_interval == 0) or epoch_1 == last_epoch:
         file_path = f"{save_path}{epoch_1}.pt"
         print('\nSaving model to', file_path)
         saveModel(file_path, model, {
@@ -268,8 +277,14 @@ for epoch in range(first_epoch, last_epoch):
                 'continued_from': args.continue_from,
             }
         })
+        if args.onnx:
+            print('Exporting to onnx')
+            onnx_file_path = f"{save_path}{epoch_1}.onnx"
+            model.export_to_onnx(onnx_file_path)
+
+
     # append loss to log file
-    with open(f"{save_path}loss.csv", 'a') as f:
+    with open(f"{save_path}loss.csv", 'a', encoding='utf8') as f:
         f.write(f"{epoch_1},{loss}\n")
 
 print(f"\nTotal training time: {toal_time:.2f} seconds")

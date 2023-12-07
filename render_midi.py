@@ -220,14 +220,12 @@ def generate_song(midifile, outpath, soundfonts):
 
                 event_time = accumulated_time + mido.tick2second(tick - accumulated_ticks, ticks_per_beat, tempo)
                 event_volume = (note_on.velocity / 127 * 0.5 + 0.5) * volume / 127
+                if event_volume < 0:
+                    print('event volume < 0 in song ' + midifile)
+                    print('track_volume: ' + str(volume))
+                    print('note_on.velocity: ' + str(note_on.velocity))
 
                 audio_events.append(AudioEvent(event_time, note_on.note, event_volume))
-
-            # for tempo_change in tempo_changes:
-            #     print(tempo_change)
-            # print('last tick: ' + str(tick))
-            # print('last event time: ' + str(mido.tick2second(tick, ticks_per_beat, tempo_changes[0].tempo)))
-            # print('last event time: ' + str(tick * tempo_changes[0].tempo / ticks_per_beat))
 
             audio_events.sort(key=lambda x: x.time)
 

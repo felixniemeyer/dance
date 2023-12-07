@@ -56,7 +56,7 @@ def loadModel(file):
     return model, obj 
 
 def saveModel(file, model, obj):
-    for model_type, model_class in models.items(): 
+    for model_type, model_class in models.items():
         if isinstance(model, model_class):
             torch.save({
                 'model_type': model_type,
