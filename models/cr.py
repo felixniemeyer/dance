@@ -5,10 +5,10 @@ class CR(nn.Module):
     def __init__(self, 
         cnn_layers=3, 
         cnn_first_layer_feature_size=32, 
-        rnn_hidden_size=64, 
-        rnn_layers=2, 
-        rnn_dropout=0, 
-        cnn_dropout=0
+        rnn_hidden_size=96, 
+        rnn_layers=3, 
+        rnn_dropout=0.3, 
+        cnn_dropout=0.3
     ):
         super(CR, self).__init__()
 
@@ -29,8 +29,8 @@ class CR(nn.Module):
                 nn.MaxPool1d(
                     kernel_size=pool_size,
                     stride=pool_size,
-                )
-                nn.dropout(cnn_dropout),
+                ),
+                nn.Dropout(cnn_dropout),
             ]
             previous_feature_size = feature_size
             feature_size *= 2
