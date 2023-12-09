@@ -7,7 +7,6 @@ import subprocess
 import time
 import threading
 import argparse
-import traceback
 
 import mido
 
