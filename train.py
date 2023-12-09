@@ -278,9 +278,8 @@ for epoch in range(first_epoch, last_epoch):
             }
         })
         if args.onnx:
-            print('Exporting to onnx')
             onnx_file_path = f"{save_path}{epoch_1}.onnx"
-            model.export_to_onnx(onnx_file_path)
+            model.export_to_onnx(onnx_file_path, device)
 
 
     # append loss to log file

@@ -70,8 +70,12 @@ class CR(nn.Module):
         x, new_state = self.rnn(cnn_outputs, state)
         return self.finalLayer(x), new_state
 
-    def export_to_onnx(self, outfile): 
-        print('Exporting to onnx')
+    def export_to_onnx(self, outfile, device): 
         # buffer_size random values in 1 sequence element in 1 sequence
-        val_inputs = torch.rand(1, 1, frame_size)
-        torch.onnx.export(model, val_inputs, verbose=True, h0=torch.zeros(1, 1, 512), c0=torch.zeros(1, 1, 512))
+        inputs = torch.rand(1, 1, frame_size, device=device)
+        h0 = torch.zeros(self.rnn_layers, 1, self.rnn_hidden_size, device=device)
+
+        (output, hn) = self(inputs, h0)
+
+        print('Exporting to onnx.')
+        torch.onnx.export(self, (inputs, h0), outfile, input_names=['input', 'h0'], output_names=['output', 'hn'])
