@@ -12,9 +12,7 @@ import re
 import subprocess
 
 import torch
-import torch.nn as nn
-import torch.optim as optim
-
+from torch import nn, optim
 from torch.utils.data import DataLoader, random_split
 
 from dance_data import DanceDataset
