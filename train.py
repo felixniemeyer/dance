@@ -39,7 +39,7 @@ parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Cu
 # hyperparameters
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
 parser.add_argument("-r", "--learning-rate", type=float, default=1e-4, help="learning rate")
-parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.9, help="learning rate decay")
+parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.95, help="learning rate decay")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 parser.add_argument("-w", "--add-weight", type=float, default=2, help="additional weight for frames with audio events loss")
 

@@ -14,6 +14,7 @@ from .v2_large import V2Large
 from .v2_extra_large import V2ExtraLarge 
 from .v2_coolio import V2Coolio
 from .cr import CR
+from .crs import CRS
 
 models = {
     'cnn_only': CNNOnly,
@@ -31,16 +32,20 @@ models = {
     'v2_extra_large': V2ExtraLarge, 
     'v2_coolio': V2Coolio, 
     'CR': CR,
+    'CRS': CRS
 }
 
 def getModels():
     return list(models.keys())
 
-def getModelClass(name): 
-    for key in models.keys():
+class ModelNotImplemented(Exception):
+    pass
+
+def getModelClass(name):
+    for key, value in models.items():
         if key == name:
-            return models[key]
-    raise Exception('invalid model')
+            return value
+    raise ModelNotImplemented('invalid model')
 
 def loadModel(file):
     obj = torch.load(file)
@@ -51,9 +56,9 @@ def loadModel(file):
     print('loading model: ', model_type)
 
     model = modelClass()
-    model.load_state_dict(obj['model_state_dict']) 
+    model.load_state_dict(obj['model_state_dict'])
 
-    return model, obj 
+    return model, obj
 
 def saveModel(file, model, obj):
     for model_type, model_class in models.items():
@@ -63,4 +68,3 @@ def saveModel(file, model, obj):
                 'model_state_dict': model.state_dict(),
                 **obj
             }, file)
-

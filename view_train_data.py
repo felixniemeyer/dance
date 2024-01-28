@@ -1,20 +1,24 @@
+"""
+shows a random sample of the training data
+"""
+
+import numpy as np
+
 from dance_data import DanceDataset
 from config import samplerate, frame_size
-import numpy as np
 
 from results_plotter import ResultsPlotter
 
-from config import samplerate, frame_size
-
-ds = DanceDataset("data/chunks/lakh_clean", frame_size, samplerate, print_filename=True)
+ds = DanceDataset("data/chunks/lakh_clean", frame_size, samplerate)
 
 while True:
     i = np.random.randint(0, len(ds))
 
-    frames, labels = ds[i]
+    frames, labels, file = ds[i]
 
     audio_data = frames.numpy().reshape(-1)
 
+    # TODO: adapt to new plotter interface
     plotter = ResultsPlotter(frame_size, samplerate)
     plotter.plot_wav(frames)
 
