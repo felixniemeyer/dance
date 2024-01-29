@@ -1,7 +1,13 @@
-# Terminology: 
+"""
+some configuration variables
+"""
+# Terminology:
 # chunk = a piece of audio (e.g. 16 seconds long)
 # frame = equally sized chunks of audio
 # sequence = a sequence of frames
+
+# durations in seconds
+# sizes in samples
 
 # audio config
 bitrate = 16

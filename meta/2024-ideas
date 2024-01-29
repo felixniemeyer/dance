@@ -1,0 +1,51 @@
+
+
+more diverse Data: Get kick and snare timestamps for audio files 
+ => demucs + onset detection + classification
+
+
+Try various architectures and training parameters automatically
+ => Evolutionary approach maybe
+
+
+Presentation: 
+
+google magenta
+  - use that for dataset generation
+  - https://magenta.tensorflow.org/onsets-frames
+
+consider lower sample rates
+  - will do that if performance becomes an issue
+  - so far: runs quite well even on cpu
+
+
+I have long sequences (689) 
+
+technical questions
+  - how to choose learn rate 
+
+AKT workstations
+  - 4 GPU workstations at AKT
+  - Can I have ssh access to a linux machine?
+    => HPC
+
+Regarding latency: best case would be: the neural network learns to anticipate kicks and snares
+  - 
+
+---
+
+Atom optimizer
+
+---
+
+AKT PC Pool: https://www.tu.berlin/ak/einrichtungen-services/labore/pc-pool 
+
+Send email to fabian => Vogt
+
+---
+
+maybe not weigh the data
+
+-
+
+About fault detection in machines, there’s the so-called DCASE challenge, they always have one track about fault detection: https://dcase.community/ 

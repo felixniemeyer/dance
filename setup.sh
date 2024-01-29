@@ -1,9 +1,14 @@
+# 
+# This script downloads a few soundfonts, creates directories, 
+# creates venv and installs requirements.
+#
+
 echo 'making directories'
 if [ ! -d "data" ]; then
   mkdir data
 fi
-if [ ! -d "soundfonts" ]; then
-  mkdir soundfonts
+if [ ! -d "data/soundfonts" ]; then
+  mkdir data/soundfonts
 fi
 
 # if /data/midi/lakh_clean doesn't exist, download it
@@ -22,7 +27,7 @@ fi
 
 ###
 echo 'downloading soundfonts'
-cd soundfonts
+cd data/soundfonts
 
 # found a list of soundfonts here: https://github.com/FluidSynth/fluidsynth/wiki/SoundFont
 if [ ! -d "GeneralUser GS 1.471" ]; then
@@ -53,7 +58,7 @@ if [ ! -f 'MS_Basic.sf3' ]; then
   wget 'https://github.com/musescore/MuseScore/raw/master/share/sound/MS%20Basic.sf3' -O 'MS_Basic.sf3'
 fi
 
-cd ..
+cd ../..
 
 ###
 if [ ! -d 'venv' ]; then
