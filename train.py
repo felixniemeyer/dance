@@ -15,7 +15,7 @@ import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, random_split
 
-from dance_data import DanceDataset
+from dancer_data import DanceDataset
 
 from models.selector import getModelClass, loadModel, getModels, saveModel
 
