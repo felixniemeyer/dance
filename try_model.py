@@ -4,7 +4,7 @@ import numpy as np
 import argparse
 import subprocess
 
-from dance_data import DanceDataset
+from dancer_data import DanceDataset
 from results_plotter import ResultsPlotter
 from config import samplerate, frame_size
 from models.selector import loadModel

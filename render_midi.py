@@ -20,7 +20,7 @@ parser.add_argument('--midi-path', type=str, default='data/midi/lakh_clean',
 parser.add_argument('--single-file', type=str, default=None,
     help='path to a single midi file instead of --midi-path')
 
-parser.add_argument('--soundfont-path', type=str, default='soundfonts',
+parser.add_argument('--soundfont-path', type=str, default='data/soundfonts',
     help='path to the soundfonts')
 parser.add_argument('--single-soundfont', type=str, default=None,
     help='path to a single soundfont instead of --soundfont-path')
