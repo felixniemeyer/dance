@@ -7,6 +7,7 @@ import subprocess
 import time
 import threading
 import argparse
+import random
 
 import mido
 
@@ -37,6 +38,8 @@ parser.add_argument('--overwrite', default=False, action='store_true',
     help='overwrite existing files')
 parser.add_argument('--max-processes', type=int, default=9,
     help='max processes to use')
+parser.add_argument('--midi-jitter-max-seconds', type=float, default=0.0,
+    help='max absolute jitter for drum note_on events in seconds. 0 disables jitter.')
 
 # parse arguments
 args = parser.parse_args()
@@ -87,10 +90,24 @@ class VolumeChange:
         self.tick = tick
         self.volume = volume
 
+class TimeSignatureChange:
+    def __init__(self, tick, numerator, denominator):
+        self.tick = tick
+        self.numerator = numerator
+        self.denominator = denominator
+
 start_time = time.time()
 def generate_song(midifile, outpath, soundfonts, threads):
     try:
         mid = mido.MidiFile(midifile)
+        render_midifile = midifile
+        if args.midi_jitter_max_seconds > 0:
+            mid = jitter_drum_notes(mid, args.midi_jitter_max_seconds)
+            if not os.path.exists(outpath):
+                os.makedirs(outpath, exist_ok=True)
+            render_midifile = os.path.join(outpath, '__jittered.mid')
+            mid.save(render_midifile)
+
         duration = mid.length
 
         print(f'Song length: {duration:.2f} seconds')
@@ -103,7 +120,11 @@ def generate_song(midifile, outpath, soundfonts, threads):
         ticks_per_beat = mid.ticks_per_beat
         print('ticks per beat: ' + str(ticks_per_beat))
 
-        note_ons, tempo_changes, volume_changes = read_events(mid)
+        note_ons, tempo_changes, volume_changes, time_signatures, max_tick = read_events(mid)
+
+        if not has_valid_time_signature(time_signatures):
+            print('Skipping ' + midifile + ' because it has no usable time signature data')
+            return
 
         if len(note_ons) < 20:
             print('Skipping ' + midifile + ' because it has less than 20 relevant percussion events')
@@ -112,12 +133,24 @@ def generate_song(midifile, outpath, soundfonts, threads):
                 os.makedirs(outpath, exist_ok=True)
 
             audio_events = calc_audio_events(note_ons, tempo_changes, volume_changes, ticks_per_beat)
+            bar_starts = calc_bar_starts_in_seconds(
+                time_signatures,
+                tempo_changes,
+                ticks_per_beat,
+                max_tick,
+                note_ons[0].tick,
+            )
+            if len(bar_starts) < 2:
+                print('Skipping ' + midifile + ' because bar extraction failed')
+                return
+
             write_audio_events(audio_events, outpath)
+            write_bar_starts(bar_starts, outpath)
 
             for soundfont in soundfonts:
                 outfile_without_ext = os.path.join(outpath, soundfont.name)
                 # call render_and_convert in a new thread
-                thread = threading.Thread(target=render_and_convert, args=(midifile, outfile_without_ext, soundfont, duration + 60))
+                thread = threading.Thread(target=render_and_convert, args=(render_midifile, outfile_without_ext, soundfont, duration + 60))
                 threads.append(thread)
                 thread.start()
                 print(f'Starting thread {len(threads)}/{args.max_processes}')
@@ -134,6 +167,8 @@ def read_events(mid):
     note_ons = []
     tempo_changes = []
     volume_changes = []
+    time_signatures = []
+    max_tick = 0
 
     for _, track in enumerate(mid.tracks):
         # look for program change to drums
@@ -142,6 +177,7 @@ def read_events(mid):
 
         for msg in track:
             ticks += msg.time
+            max_tick = max(max_tick, ticks)
             if msg.type == 'set_tempo':
                 tempo_changes.append(TempoChange(ticks, msg.tempo))
             if msg.type == 'note_on':
@@ -151,13 +187,23 @@ def read_events(mid):
             if msg.type == 'control_change':
                 if msg.channel == 9 and msg.control == 7:
                     volume_changes.append(VolumeChange(ticks, msg.value))
+            if msg.type == 'time_signature':
+                time_signatures.append(TimeSignatureChange(ticks, msg.numerator, msg.denominator))
 
     # sort everything because it may come from different tracks
     tempo_changes.sort(key=lambda x: x.tick)
     volume_changes.sort(key=lambda x: x.tick)
     note_ons.sort(key=lambda x: x.tick)
+    time_signatures.sort(key=lambda x: x.tick)
 
-    return note_ons, tempo_changes, volume_changes
+    deduped_time_signatures = []
+    for ts in time_signatures:
+        if len(deduped_time_signatures) == 0 or deduped_time_signatures[-1].tick != ts.tick:
+            deduped_time_signatures.append(ts)
+        else:
+            deduped_time_signatures[-1] = ts
+
+    return note_ons, tempo_changes, volume_changes, deduped_time_signatures, max_tick
 
 def calc_audio_events(note_ons, tempo_changes, volume_changes, ticks_per_beat):
     # initialize results array
@@ -204,6 +250,132 @@ def write_audio_events(audio_events, outpath):
     with open(events_file_path, 'w', encoding='utf-8') as event_file:
         for event in audio_events:
             event_file.write(event.to_csv_line() + '\n')
+
+def write_bar_starts(bar_starts, outpath):
+    print('Writing bar starts to file')
+    bars_file_path = os.path.join(outpath, 'bars.csv')
+    with open(bars_file_path, 'w', encoding='utf-8') as bars_file:
+        for bar_start in bar_starts:
+            bars_file.write(f'{bar_start:.6f}\n')
+
+def has_valid_time_signature(time_signatures):
+    if len(time_signatures) == 0:
+        return False
+    if time_signatures[0].tick != 0:
+        return False
+    for ts in time_signatures:
+        if ts.numerator <= 0:
+            return False
+        if ts.denominator not in [1, 2, 4, 8, 16, 32]:
+            return False
+    return True
+
+def calc_bar_starts_in_seconds(time_signatures, tempo_changes, ticks_per_beat, max_tick, first_note_tick):
+    bar_starts_in_ticks = calc_bar_starts_in_ticks(time_signatures, ticks_per_beat, max_tick)
+    if len(bar_starts_in_ticks) < 2:
+        return []
+
+    # Treat the first full bar at or after the first drum note as phase origin.
+    origin_tick = bar_starts_in_ticks[0]
+    for tick in bar_starts_in_ticks:
+        if tick >= first_note_tick:
+            origin_tick = tick
+            break
+
+    bar_starts_in_ticks = [tick for tick in bar_starts_in_ticks if tick >= origin_tick]
+    if len(bar_starts_in_ticks) < 2:
+        return []
+
+    return ticks_to_seconds(bar_starts_in_ticks, tempo_changes, ticks_per_beat)
+
+def calc_bar_starts_in_ticks(time_signatures, ticks_per_beat, max_tick):
+    bar_starts = []
+    if len(time_signatures) == 0:
+        return bar_starts
+
+    extended_time_signatures = list(time_signatures)
+    extended_time_signatures.append(TimeSignatureChange(max_tick + ticks_per_beat * 16, 4, 4))
+
+    for idx, ts in enumerate(extended_time_signatures[:-1]):
+        next_tick = extended_time_signatures[idx + 1].tick
+        bar_ticks = int(ticks_per_beat * 4 * ts.numerator / ts.denominator)
+        if bar_ticks <= 0:
+            continue
+
+        tick = ts.tick
+        while tick < next_tick:
+            if len(bar_starts) == 0 or bar_starts[-1] != tick:
+                bar_starts.append(tick)
+            tick += bar_ticks
+
+    # Ensure one extra bar start so phase interpolation has an end bound.
+    if len(bar_starts) > 0:
+        last_ts = extended_time_signatures[-2]
+        last_bar_ticks = int(ticks_per_beat * 4 * last_ts.numerator / last_ts.denominator)
+        if last_bar_ticks > 0:
+            bar_starts.append(bar_starts[-1] + last_bar_ticks)
+
+    return bar_starts
+
+def ticks_to_seconds(ticks, tempo_changes, ticks_per_beat):
+    if len(ticks) == 0:
+        return []
+
+    sorted_ticks = sorted(ticks)
+    if len(tempo_changes) == 0 or tempo_changes[0].tick != 0:
+        tempo_changes = [TempoChange(0, 500000)] + tempo_changes
+
+    results = []
+    current_tempo_index = 0
+    current_tempo = tempo_changes[current_tempo_index].tempo
+    previous_tempo_tick = tempo_changes[current_tempo_index].tick
+    accumulated_seconds = 0.0
+
+    for target_tick in sorted_ticks:
+        while (current_tempo_index + 1) < len(tempo_changes) and tempo_changes[current_tempo_index + 1].tick <= target_tick:
+            next_change = tempo_changes[current_tempo_index + 1]
+            accumulated_seconds += mido.tick2second(next_change.tick - previous_tempo_tick, ticks_per_beat, current_tempo)
+            previous_tempo_tick = next_change.tick
+            current_tempo = next_change.tempo
+            current_tempo_index += 1
+
+        seconds = accumulated_seconds + mido.tick2second(target_tick - previous_tempo_tick, ticks_per_beat, current_tempo)
+        results.append(seconds)
+
+    return results
+
+def jitter_drum_notes(mid, max_seconds):
+    if max_seconds <= 0:
+        return mid
+
+    jittered = mido.MidiFile(ticks_per_beat=mid.ticks_per_beat, type=mid.type)
+    max_ticks = int(max_seconds * 2 * mid.ticks_per_beat)
+
+    for track in mid.tracks:
+        absolute_messages = []
+        tick = 0
+        for msg in track:
+            tick += msg.time
+            absolute_messages.append([tick, msg.copy(time=0)])
+
+        previous_tick = 0
+        for message_data in absolute_messages:
+            current_tick, msg = message_data
+            if msg.type == 'note_on' and getattr(msg, 'channel', -1) == 9 and msg.velocity > 0:
+                delta = int(random.uniform(-1, 1) * random.uniform(0, max_ticks))
+                current_tick = max(previous_tick, current_tick + delta)
+                message_data[0] = current_tick
+            previous_tick = current_tick
+
+        new_track = mido.MidiTrack()
+        previous_tick = 0
+        for absolute_tick, msg in absolute_messages:
+            delta = absolute_tick - previous_tick
+            previous_tick = absolute_tick
+            new_track.append(msg.copy(time=delta))
+        jittered.tracks.append(new_track)
+
+    return jittered
 
 class RenderProcessException(Exception):
     pass

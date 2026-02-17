@@ -49,7 +49,7 @@ class CR(nn.Module):
         self.post_cnn_size = frame_size // pool_size ** cnn_layers * previous_feature_size
 
         self.rnn = nn.RNN(
-            input_size=self.post_cnn_size,
+            input_size=self.post_cnn_size + 1,
             hidden_size=rnn_hidden_size,
             num_layers=rnn_layers,
             dropout=rnn_dropout,
@@ -59,23 +59,29 @@ class CR(nn.Module):
         self.finalLayer = nn.Sequential(
             nn.Linear(in_features=rnn_hidden_size, out_features=rnn_hidden_size // 2),
             nn.Sigmoid(),
-            nn.Linear(in_features=rnn_hidden_size // 2, out_features=2),
+            nn.Linear(in_features=rnn_hidden_size // 2, out_features=1),
             nn.Sigmoid()
         )
 
-    def forward(self, batch_inputs, state=None):  # takes a batch of sequences
+    def forward(self, batch_inputs, anticipation=None, state=None):  # takes a batch of sequences
         frames = batch_inputs.view(-1, 1, frame_size)
         cnn_outputs = self.conv_layers(frames)
         cnn_outputs = cnn_outputs.view(batch_inputs.shape[0], batch_inputs.shape[1], self.post_cnn_size) # batch id, sequence id, buffer id, feature id
-        x, new_state = self.rnn(cnn_outputs, state)
+        if anticipation is None:
+            anticipation = torch.zeros(batch_inputs.shape[0], device=batch_inputs.device, dtype=batch_inputs.dtype)
+        anticipation = anticipation.view(-1, 1, 1).to(cnn_outputs.device, dtype=cnn_outputs.dtype)
+        anticipation_feature = anticipation.expand(-1, cnn_outputs.shape[1], 1)
+
+        x, new_state = self.rnn(torch.cat([cnn_outputs, anticipation_feature], dim=2), state)
         return self.finalLayer(x), new_state
 
     def export_to_onnx(self, outfile, device):
         print('Exporting to onnx.')
         # buffer_size random values in 1 sequence element in 1 sequence
         inputs = torch.rand(1, 1, frame_size, device=device)
+        anticipation = torch.rand(1, device=device)
         h0 = torch.zeros(self.rnn_layers, 1, self.rnn_hidden_size, device=device)
 
-        _output, _hn = self(inputs, h0)
+        _output, _hn = self(inputs, anticipation, h0)
 
-        torch.onnx.export(self, (inputs, h0), outfile, input_names=['input', 'h0'], output_names=['output', 'hn'])
+        torch.onnx.export(self, (inputs, anticipation, h0), outfile, input_names=['input', 'anticipation', 'h0'], output_names=['output', 'hn'])

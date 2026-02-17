@@ -41,10 +41,8 @@ parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of e
 parser.add_argument("-r", "--learning-rate", type=float, default=1e-4, help="learning rate")
 parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.95, help="learning rate decay")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
-parser.add_argument("-w", "--add-weight", type=float, default=2, help="additional weight for frames with audio events loss")
-
-# audio
-parser.add_argument("--audio-event-half-life", type=float, default=0.02, help="half life of kicks and snares in seconds")
+parser.add_argument("--anticipation-min", type=float, default=0.0, help="minimum anticipation in seconds")
+parser.add_argument("--anticipation-max", type=float, default=0.5, help="maximum anticipation in seconds")
 
 # misc
 parser.add_argument("-d", "--dataset-size", type=int, default=None, help="truncate dataset to this size. For test runs.")
@@ -57,6 +55,10 @@ args = parser.parse_args()
 
 relative_offset = 0.2
 
+if args.anticipation_min < 0 or args.anticipation_max < 0:
+    raise ValueError('anticipation values must be non-negative')
+if args.anticipation_max < args.anticipation_min:
+    raise ValueError('anticipation-max must be >= anticipation-min')
 
 if args.tag is None:
     os.system('git log --decorate -n 1 > .git_tag.txt~')
@@ -104,7 +106,6 @@ if args.dataset_size is not None:
         indizes = torch.randperm(len(dataset))[:data_size]
         dataset = torch.utils.data.Subset(dataset, indizes)
 
-
 train_size = int(0.8 * data_size)
 val_size = data_size - train_size
 
@@ -112,7 +113,6 @@ train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
-
 
 # Load model from disk if it exists
 first_epoch = 0
@@ -141,8 +141,7 @@ if args.continue_from_file is not None:
 else:
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 
-
-# scale down learning rate to 0.1 from initial value after
+# scale down learning rate after each epoch
 scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.learning_rate_decay, last_epoch=-1)
 
 last_epoch = first_epoch + args.num_epochs
@@ -152,28 +151,56 @@ class CustomLoss(nn.Module):
     def __init__(self, relative_offset):
         super().__init__()
         self.relative_offset = relative_offset
-        self.criterion = nn.CrossEntropyLoss()
-        self.boost = args.add_weight
 
     def forward(self, full_predictions, full_labels):
         tfs = int(full_labels.shape[1] * self.relative_offset)
-        predictions = full_predictions[:, tfs:, :]
-        labels = full_labels[:, tfs:, :]
+        predictions = full_predictions[:, tfs:, 0]
+        labels = full_labels[:, tfs:]
 
-        # Define weights based on the condition where at least one output is 1
-        # weights = torch.where(torch.logical_or(y_true == 1, y_pred == 1), torch.tensor(10.0), torch.tensor(1))
+        # Circular difference in [-0.5, 0.5).
+        diff = torch.remainder(predictions - labels + 0.5, 1.0) - 0.5
+        return torch.mean(diff * diff)
 
-        # weights = (max of elements of last dimension) * 9 + 1
-        weights = torch.max(labels, dim=2)[0] * self.boost + 1
 
-        # Apply weights to the binary cross-entropy loss for each output dimension
-        loss_1 = nn.functional.binary_cross_entropy(predictions[:, :, 0], labels[:, :, 0], weight=weights)
-        loss_2 = nn.functional.binary_cross_entropy(predictions[:, :, 1], labels[:, :, 1], weight=weights)
+criterion = CustomLoss(relative_offset)
+frame_duration = config.frame_size / config.samplerate
 
-        # Return the mean loss
-        return (loss_1 + loss_2) / 2.0  # You can adjust this based on your preference
 
-criterion = CustomLoss(0.1)
+def sample_anticipation(batch_size_local, device_local):
+    random_values = torch.rand(batch_size_local, device=device_local)
+    return args.anticipation_min + random_values * (args.anticipation_max - args.anticipation_min)
+
+
+def create_future_phase_labels(phase_labels, anticipation):
+    # phase_labels shape: [batch, frames] with values in [0,1)
+    sequence_length = phase_labels.shape[1]
+    frame_indices = torch.arange(sequence_length, device=phase_labels.device, dtype=phase_labels.dtype).unsqueeze(0)
+    offset_in_frames = (anticipation / frame_duration).unsqueeze(1)
+    lookup_index = frame_indices + offset_in_frames
+
+    low = torch.floor(lookup_index).long().clamp(max=sequence_length - 1)
+    high = (low + 1).clamp(max=sequence_length - 1)
+    w = lookup_index - low.float()
+
+    low_values = phase_labels.gather(1, low)
+    high_values = phase_labels.gather(1, high)
+
+    low_angle = low_values * 2 * torch.pi
+    high_angle = high_values * 2 * torch.pi
+
+    x = torch.cos(low_angle) * (1 - w) + torch.cos(high_angle) * w
+    y = torch.sin(low_angle) * (1 - w) + torch.sin(high_angle) * w
+    angle = torch.atan2(y, x)
+
+    return torch.remainder(angle / (2 * torch.pi), 1.0)
+
+
+def model_forward(model_local, batch_inputs, anticipation):
+    try:
+        return model_local(batch_inputs, anticipation=anticipation)
+    except TypeError:
+        return model_local(batch_inputs)
+
 
 avg_loss_sum = 0
 toal_time = 0
@@ -195,18 +222,23 @@ for epoch in range(first_epoch, last_epoch):
     model.train()  # Set the model to training mode
     start_time = time.time()
 
-    for i, (batch_inputs, batch_labels, _) in enumerate(train_loader):
+    for i, (batch_inputs, phase_labels, _) in enumerate(train_loader):
 
         if not args.summarize:
             print('\rbatch', i + 1, 'of', (train_size - 1) // batch_size + 1, end='\r', flush=True)
 
         start_calc = time.time()
-        batch_inputs, batch_labels = batch_inputs.to(device), batch_labels.to(device)
+        batch_inputs = batch_inputs.to(device)
+        phase_labels = phase_labels.to(device)
+        anticipation = sample_anticipation(batch_inputs.shape[0], device)
+        target_labels = create_future_phase_labels(phase_labels, anticipation)
         to_device_time = time.time() - start_calc
 
         # Forward pass
         start_calc = time.time()
-        outputs, _ = model(batch_inputs)
+        outputs, _ = model_forward(model, batch_inputs, anticipation)
+        if outputs.shape[-1] != 1:
+            raise ValueError('Model must output one phase value per frame. Got shape: ' + str(outputs.shape))
         forward_time += time.time() - start_calc
 
         # Zero out the gradients
@@ -214,7 +246,7 @@ for epoch in range(first_epoch, last_epoch):
 
         # Compute the loss
         start_calc = time.time()
-        loss = criterion(outputs, batch_labels)
+        loss = criterion(outputs, target_labels)
         loss_calc_time += time.time() - start_calc
 
         # Backpropagation
@@ -236,20 +268,24 @@ for epoch in range(first_epoch, last_epoch):
         total_loss = 0
         total_batches = 0
 
-        for i, (val_inputs, val_labels, _) in enumerate(val_loader):
+        for i, (val_inputs, val_phase_labels, _) in enumerate(val_loader):
 
             if not args.summarize:
                 print('\rbatch', i + 1, 'of', (val_size - 1) // batch_size + 1, end='\r', flush=True)
 
-            val_inputs, val_labels = val_inputs.to(device), val_labels.to(device)
+            val_inputs = val_inputs.to(device)
+            val_phase_labels = val_phase_labels.to(device)
+            anticipation = sample_anticipation(val_inputs.shape[0], device)
+            val_target_labels = create_future_phase_labels(val_phase_labels, anticipation)
 
             # Forward pass
-            val_outputs, _ = model(val_inputs)
+            val_outputs, _ = model_forward(model, val_inputs, anticipation)
+            if val_outputs.shape[-1] != 1:
+                raise ValueError('Model must output one phase value per frame. Got shape: ' + str(val_outputs.shape))
 
             # Compute the loss
-            loss = criterion(val_outputs, val_labels)
+            loss = criterion(val_outputs, val_target_labels)
 
-            # Compute accuracy
             total_loss += loss
             total_batches += 1
 
@@ -272,13 +308,14 @@ for epoch in range(first_epoch, last_epoch):
             'hyperparameters': {
                 'learning_rate': args.learning_rate,
                 'batch_size': args.batch_size,
+                'anticipation_min': args.anticipation_min,
+                'anticipation_max': args.anticipation_max,
                 'continued_from': args.continue_from,
             }
         })
         if args.onnx:
             onnx_file_path = f"{save_path}{epoch_1}.onnx"
             model.export_to_onnx(onnx_file_path, device)
-
 
     # append loss to log file
     with open(f"{save_path}loss.csv", 'a', encoding='utf8') as f:

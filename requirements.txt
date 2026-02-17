@@ -3,3 +3,5 @@ soundfile
 numpy
 matplotlib
 onnx
+torch
+torchaudio

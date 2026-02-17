@@ -10,13 +10,14 @@ import os
 import random
 
 import argparse
+from bisect import bisect_right
 
 import threading
 import subprocess
 
 import soundfile
 
-from config import chunk_duration
+from config import chunk_duration, frame_size
 
 from audio_event import AudioEvent
 
@@ -73,7 +74,36 @@ def call_ffmpeg(command, outfile):
     except Exception as error:
         print('ffmpeg failed. Rolling back.', error)
         os.remove(outfile + '.events')
+        os.remove(outfile + '.phase')
         os.remove(outfile + '.ogg')
+
+def read_bar_starts(file_path):
+    bars = []
+    with open(file_path, 'r', encoding='utf8') as f:
+        for line in f:
+            line = line.strip()
+            if line != '':
+                bars.append(float(line))
+    bars.sort()
+    return bars
+
+def calc_phase_at_time(time_in_seconds, bars):
+    bar_index = bisect_right(bars, time_in_seconds) - 1
+    if bar_index < 0 or bar_index + 1 >= len(bars):
+        return None
+
+    bar_start = bars[bar_index]
+    bar_end = bars[bar_index + 1]
+    if bar_end <= bar_start:
+        return None
+
+    phase = (time_in_seconds - bar_start) / (bar_end - bar_start)
+    # Keep in [0,1) for numerical stability.
+    if phase < 0:
+        return None
+    if phase >= 1:
+        phase = phase % 1.0
+    return phase
 
 for artist in os.listdir(args.in_path):
     print('Artist: ', artist)
@@ -91,6 +121,14 @@ for artist in os.listdir(args.in_path):
         with open(songpath + 'events.csv', 'r', encoding='utf8') as f:
             for line in f:
                 events.append(AudioEvent.from_csv_line(line))
+        bars_path = songpath + 'bars.csv'
+        if not os.path.exists(bars_path):
+            print('Skipping song, missing bars.csv:', songpath)
+            continue
+        bar_starts = read_bar_starts(bars_path)
+        if len(bar_starts) < 2:
+            print('Skipping song, not enough bars:', songpath)
+            continue
 
         for audio_file in audio_files:
             data, sample_rate = soundfile.read(songpath + audio_file)
@@ -159,6 +197,27 @@ for artist in os.listdir(args.in_path):
                         else:
                             f.write(f"{time:.4f},{event.note},{event.volume:.4f}\n")
                         event_pointer += 1
+
+                frame_count = int(chunk_duration * args.sample_rate / frame_size)
+                phases = []
+                chunk_is_valid = True
+                for frame_index in range(frame_count):
+                    local_time = frame_index * frame_size / args.sample_rate
+                    original_time = start_time + local_time * pitch
+                    phase = calc_phase_at_time(original_time, bar_starts)
+                    if phase is None:
+                        chunk_is_valid = False
+                        break
+                    phases.append(phase)
+
+                if not chunk_is_valid:
+                    if os.path.exists(outfile + '.events'):
+                        os.remove(outfile + '.events')
+                    continue
+
+                with open(outfile + '.phase', 'w', encoding='utf8') as f:
+                    for phase in phases:
+                        f.write(f"{phase:.6f}\n")
 
                 newrate = args.sample_rate * pitch
 
