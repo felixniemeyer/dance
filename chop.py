@@ -17,7 +17,7 @@ import subprocess
 
 import soundfile
 
-from config import chunk_duration, frame_size
+from config import chunk_duration, frame_size, samplerate
 
 from audio_event import AudioEvent
 
@@ -25,7 +25,7 @@ parser = argparse.ArgumentParser(description='Chop up the songs into chunks.')
 
 parser.add_argument('--in-path', type=str, default='data/rendered_midi/lakh_clean', help='path to the rendered audio. The directory structure is expected to be: <in-path>/<artist>/ and contain a folder <song> with n .ogg files along with one events.csv file')
 parser.add_argument('--out-path', type=str, help='path to the output directory')
-parser.add_argument('--sample-rate', type=int, default=44100, help='sample rate')
+parser.add_argument('--sample-rate', type=int, default=samplerate, help='sample rate')
 parser.add_argument('--min-pitch', type=float, default=0.71, help='will choose random pitches between this and 1')
 parser.add_argument('--volume', type=float, default=2, help='output level before limiter')
 

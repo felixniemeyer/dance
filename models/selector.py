@@ -15,6 +15,7 @@ from .v2_extra_large import V2ExtraLarge
 from .v2_coolio import V2Coolio
 from .cr import CR
 from .crs import CRS
+from .phase_tcn import PhaseTCN
 
 models = {
     'cnn_only': CNNOnly,
@@ -32,7 +33,8 @@ models = {
     'v2_extra_large': V2ExtraLarge, 
     'v2_coolio': V2Coolio, 
     'CR': CR,
-    'CRS': CRS
+    'CRS': CRS,
+    'phase_tcn': PhaseTCN,
 }
 
 def getModels():

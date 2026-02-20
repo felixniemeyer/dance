@@ -11,11 +11,11 @@ some configuration variables
 
 # audio config
 bitrate = 16
-samplerate = 44100
+samplerate = 16000
 
-chunk_duration = 8
+chunk_duration = 32
 channels = 1
-frame_size = 512 # 86 FPS
+frame_size = 320 # 50 FPS at 16kHz
 
 # see https://www.zem-college.de/midi/mc_tabed.htm
 note_labels = {

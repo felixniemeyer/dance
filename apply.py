@@ -20,8 +20,6 @@ parser.add_argument("-d", "--device-type", type=str, default="cpu", help="device
 args = parser.parse_args()
 
 # read audio file
-audiofilename = args.input
-
 filebase = ""
 if args.input[-4:] == '.ogg':
     filebase = args.input[:-4]
@@ -50,35 +48,32 @@ offset = length % config.frame_size
 device = torch.device(args.device_type)
 
 # Load model from disk if it exists
-model, obj = loadModel(args.checkpoint)
+model, _obj = loadModel(args.checkpoint)
 model.to(device)
 model.eval()
 
 anticipation = torch.tensor([args.anticipation], device=device, dtype=torch.float32)
 
+sequence = audio[offset:offset + frames_in_file * config.frame_size].reshape(frames_in_file, config.frame_size)
+batch = sequence.unsqueeze(0).to(device)
+
 print('analyzing audio file...')
-state = None
 with torch.no_grad():
+    try:
+        output, _ = model(batch, anticipation=anticipation)
+    except TypeError:
+        output, _ = model(batch)
+
+    if output.shape[-1] == 2:
+        angles = torch.atan2(output[0, :, 0], output[0, :, 1])
+        phases = torch.remainder(angles / (2 * torch.pi), 1.0)
+    elif output.shape[-1] == 1:
+        phases = output[0, :, 0]
+    else:
+        raise ValueError('Unsupported output shape: ' + str(output.shape))
+
     with open(phasefile, 'w', encoding='utf8') as pf:
         for i in range(frames_in_file):
-            start = offset + i * config.frame_size
-            end = start + config.frame_size
-            frame = audio[start:end]
-
-            sequence = frame.unsqueeze(0)
-            batch = sequence.unsqueeze(0)
-
-            model_input = batch.to(device)
-
-            try:
-                output, state = model(model_input, anticipation=anticipation, state=state)
-            except TypeError:
-                output, state = model(model_input, state)
-            phase = output[0][0][0].item()
-
-            pf.write(str(phase) + '\n')
-
-            if i % 100 == 0:
-                print(f"\r{i}/{frames_in_file} ({i/frames_in_file*100:.2f}%)", end="\r")
+            pf.write(str(phases[i].item()) + '\n')
 
 print(f'{frames_in_file}/{frames_in_file} (100.00%), done.')

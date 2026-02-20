@@ -4,6 +4,7 @@ import numpy as np
 import argparse
 import subprocess
 import matplotlib.pyplot as plt
+import torch
 
 from dancer_data import DanceDataset
 from config import samplerate, frame_size
@@ -42,30 +43,28 @@ while True:
     gt.set_ylim(0, 1)
     gt.legend(loc='upper right')
 
+    model_input = frames.unsqueeze(0).to(args.device_type)
+    anticipation = torch.tensor([args.anticipation], device=args.device_type, dtype=torch.float32)
+
     for ci, checkpoint in enumerate(args.checkpoints):
         cpp = os.path.join(args.path, checkpoint)
         model, _obj = loadModel(cpp)
         model.to(args.device_type)
         model.eval()
 
-        anticipation = np.array([args.anticipation], dtype=np.float32)
-        anticipation_tensor = None
-
-        state = None
-        predicted_phase = []
-        for frame in frames:
-            sequence = frame.unsqueeze(0)
-            batch = sequence.unsqueeze(0)
-
-            if anticipation_tensor is None:
-                import torch
-                anticipation_tensor = torch.tensor(anticipation, device=args.device_type)
-
+        with torch.no_grad():
             try:
-                output, state = model(batch.to(args.device_type), anticipation=anticipation_tensor, state=state)
+                output, _ = model(model_input, anticipation=anticipation)
             except TypeError:
-                output, state = model(batch.to(args.device_type), state)
-            predicted_phase.append(output[0][0][0].item())
+                output, _ = model(model_input)
+
+            if output.shape[-1] == 2:
+                angles = torch.atan2(output[0, :, 0], output[0, :, 1])
+                predicted_phase = torch.remainder(angles / (2 * torch.pi), 1.0).cpu().numpy()
+            elif output.shape[-1] == 1:
+                predicted_phase = output[0, :, 0].cpu().numpy()
+            else:
+                raise ValueError('Unsupported output shape: ' + str(output.shape))
 
         ax = axes[ci + 1]
         ax.plot(xvalues, predicted_phase, color='tab:orange', linewidth=1, label=checkpoint)

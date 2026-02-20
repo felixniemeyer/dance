@@ -9,6 +9,10 @@ This project now trains for **bar phase estimation** (single scalar in `[0, 1)`)
 - Loss: circular (wrap-safe)
 - Time signatures are read from MIDI and used to generate bar-phase labels
 - Songs without usable time-signature data are skipped
+- Default audio config for phase mode:
+  - samplerate: `16000`
+  - chunk duration: `32s`
+  - frame size: `320` (50 FPS)
 
 ## Environment (GPU PC)
 
@@ -79,15 +83,15 @@ python chop.py \
 Train quick sanity model:
 
 ```bash
-python train.py CRS \
+python train.py phase_tcn \
   --chunks-path "data/chunks/smoke_phase" \
   --checkpoints-path "checkpoints" \
   --tag "smoke-phase" \
   --num-epochs 1 \
   --batch-size 2 \
-  --dataset-size 32 \
   --anticipation-min 0.0 \
-  --anticipation-max 0.5
+  --anticipation-max 0.5 \
+  --warmup-seconds 8.0
 ```
 
 Run inference on an `.ogg` chunk:
@@ -129,46 +133,32 @@ python chop.py \
 Baseline:
 
 ```bash
-python train.py CRS \
+python train.py phase_tcn \
   --chunks-path "data/chunks/lakh_phase" \
   --checkpoints-path "checkpoints" \
-  --tag "phase-crs-a0-500ms" \
+  --tag "phase-tcn-a0-500ms" \
   --num-epochs 30 \
   --batch-size 8 \
   --learning-rate 1e-4 \
   --learning-rate-decay 0.95 \
   --anticipation-min 0.0 \
   --anticipation-max 0.5 \
-  --onnx
-```
-
-Larger model:
-
-```bash
-python train.py CR \
-  --chunks-path "data/chunks/lakh_phase" \
-  --checkpoints-path "checkpoints" \
-  --tag "phase-cr-a0-500ms" \
-  --num-epochs 30 \
-  --batch-size 8 \
-  --learning-rate 1e-4 \
-  --learning-rate-decay 0.95 \
-  --anticipation-min 0.0 \
-  --anticipation-max 0.5 \
+  --warmup-seconds 8.0 \
   --onnx
 ```
 
 Continue training:
 
 ```bash
-python train.py CRS \
+python train.py phase_tcn \
   --chunks-path "data/chunks/lakh_phase" \
   --checkpoints-path "checkpoints" \
-  --tag "phase-crs-a0-500ms" \
+  --tag "phase-tcn-a0-500ms" \
   --continue-from 30 \
   --num-epochs 20 \
   --anticipation-min 0.0 \
-  --anticipation-max 0.5
+  --anticipation-max 0.5 \
+  --warmup-seconds 8.0
 ```
 
 ## 3) Quick Eval/Inspection
@@ -177,7 +167,7 @@ Visual inspection:
 
 ```bash
 python try_model.py checkpoints \
-  phase-crs-a0-500ms/30.pt \
+  phase-tcn-a0-500ms/30.pt \
   --dataset-path "data/chunks/lakh_phase" \
   --anticipation 0.25 \
   --device-type cuda
@@ -187,7 +177,7 @@ Batch inference on one file:
 
 ```bash
 python apply.py \
-  checkpoints/phase-crs-a0-500ms/30.pt \
+  checkpoints/phase-tcn-a0-500ms/30.pt \
   <audio.ogg> \
   --anticipation 0.25 \
   --device-type cuda

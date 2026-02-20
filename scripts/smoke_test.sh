@@ -88,7 +88,7 @@ if [[ -n "$SMOKE_DATASET_SIZE" ]]; then
   TRAIN_DATASET_ARGS+=(--dataset-size "$SMOKE_DATASET_SIZE")
 fi
 
-"$PYTHON_BIN" train.py CRS \
+"$PYTHON_BIN" train.py phase_tcn \
   --chunks-path "$CHUNKS_PATH" \
   --checkpoints-path "$CHECKPOINTS_PATH" \
   --tag "$TAG" \
@@ -98,6 +98,7 @@ fi
   --learning-rate-decay 0.95 \
   --anticipation-min 0.0 \
   --anticipation-max 0.5 \
+  --warmup-seconds 8.0 \
   "${TRAIN_DATASET_ARGS[@]}"
 
 CHECKPOINT_FILE="$CHECKPOINTS_PATH/$TAG/1.pt"

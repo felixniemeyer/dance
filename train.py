@@ -43,6 +43,7 @@ parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.95, he
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 parser.add_argument("--anticipation-min", type=float, default=0.0, help="minimum anticipation in seconds")
 parser.add_argument("--anticipation-max", type=float, default=0.5, help="maximum anticipation in seconds")
+parser.add_argument("--warmup-seconds", type=float, default=8.0, help="ignore loss in first N seconds of each sequence")
 
 # misc
 parser.add_argument("-d", "--dataset-size", type=int, default=None, help="truncate dataset to this size. For test runs.")
@@ -53,12 +54,12 @@ parser.add_argument("--onnx", action='store_true', help="export model to onnx. S
 
 args = parser.parse_args()
 
-relative_offset = 0.2
-
 if args.anticipation_min < 0 or args.anticipation_max < 0:
     raise ValueError('anticipation values must be non-negative')
 if args.anticipation_max < args.anticipation_min:
     raise ValueError('anticipation-max must be >= anticipation-min')
+if args.warmup_seconds < 0:
+    raise ValueError('warmup-seconds must be >= 0')
 
 if args.tag is None:
     os.system('git log --decorate -n 1 > .git_tag.txt~')
@@ -145,25 +146,33 @@ else:
 scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.learning_rate_decay, last_epoch=-1)
 
 last_epoch = first_epoch + args.num_epochs
+frame_duration = config.frame_size / config.samplerate
+warmup_frames = int(args.warmup_seconds / frame_duration)
 
 
 class CustomLoss(nn.Module):
-    def __init__(self, relative_offset):
+    def __init__(self, warmup_frames_local):
         super().__init__()
-        self.relative_offset = relative_offset
+        self.warmup_frames = warmup_frames_local
 
-    def forward(self, full_predictions, full_labels):
-        tfs = int(full_labels.shape[1] * self.relative_offset)
-        predictions = full_predictions[:, tfs:, 0]
-        labels = full_labels[:, tfs:]
+    def forward(self, full_predictions, full_phase_labels):
+        # predictions: [batch, frames, 2] => sin/cos
+        # labels: [batch, frames] => phase in [0,1)
+        start = min(self.warmup_frames, full_phase_labels.shape[1] - 1)
 
-        # Circular difference in [-0.5, 0.5).
-        diff = torch.remainder(predictions - labels + 0.5, 1.0) - 0.5
-        return torch.mean(diff * diff)
+        predictions = full_predictions[:, start:, :]
+        labels = full_phase_labels[:, start:]
+
+        target_angles = labels * 2 * torch.pi
+        target_vectors = torch.stack([torch.sin(target_angles), torch.cos(target_angles)], dim=-1)
+
+        prediction_norm = torch.norm(predictions, dim=-1, keepdim=True).clamp(min=1e-6)
+        normalized_predictions = predictions / prediction_norm
+
+        return torch.mean((normalized_predictions - target_vectors) ** 2)
 
 
-criterion = CustomLoss(relative_offset)
-frame_duration = config.frame_size / config.samplerate
+criterion = CustomLoss(warmup_frames)
 
 
 def sample_anticipation(batch_size_local, device_local):
@@ -237,8 +246,8 @@ for epoch in range(first_epoch, last_epoch):
         # Forward pass
         start_calc = time.time()
         outputs, _ = model_forward(model, batch_inputs, anticipation)
-        if outputs.shape[-1] != 1:
-            raise ValueError('Model must output one phase value per frame. Got shape: ' + str(outputs.shape))
+        if outputs.shape[-1] != 2:
+            raise ValueError('Model must output [sin, cos] per frame. Got shape: ' + str(outputs.shape))
         forward_time += time.time() - start_calc
 
         # Zero out the gradients
@@ -280,8 +289,8 @@ for epoch in range(first_epoch, last_epoch):
 
             # Forward pass
             val_outputs, _ = model_forward(model, val_inputs, anticipation)
-            if val_outputs.shape[-1] != 1:
-                raise ValueError('Model must output one phase value per frame. Got shape: ' + str(val_outputs.shape))
+            if val_outputs.shape[-1] != 2:
+                raise ValueError('Model must output [sin, cos] per frame. Got shape: ' + str(val_outputs.shape))
 
             # Compute the loss
             loss = criterion(val_outputs, val_target_labels)
@@ -310,6 +319,7 @@ for epoch in range(first_epoch, last_epoch):
                 'batch_size': args.batch_size,
                 'anticipation_min': args.anticipation_min,
                 'anticipation_max': args.anticipation_max,
+                'warmup_seconds': args.warmup_seconds,
                 'continued_from': args.continue_from,
             }
         })
