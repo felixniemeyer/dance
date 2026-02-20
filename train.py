@@ -107,13 +107,13 @@ if args.dataset_size is not None:
         indizes = torch.randperm(len(dataset))[:data_size]
         dataset = torch.utils.data.Subset(dataset, indizes)
 
-train_size = int(0.8 * data_size)
+train_size = max(1, int(0.8 * data_size))
 val_size = data_size - train_size
 
 train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True) if val_size > 0 else None
 
 # Load model from disk if it exists
 first_epoch = 0
@@ -270,37 +270,38 @@ for epoch in range(first_epoch, last_epoch):
     scheduler.step()
 
     # Validation after each epoch
-    model.eval()  # Set the model to evaluation mode
-    print('Evaluation')
-    with torch.no_grad():
+    if val_loader is not None:
+        model.eval()
+        print('Evaluation')
+        with torch.no_grad():
 
-        total_loss = 0
-        total_batches = 0
+            total_loss = 0
+            total_batches = 0
 
-        for i, (val_inputs, val_phase_labels, _) in enumerate(val_loader):
+            for i, (val_inputs, val_phase_labels, _) in enumerate(val_loader):
 
-            if not args.summarize:
-                print('\rbatch', i + 1, 'of', (val_size - 1) // batch_size + 1, end='\r', flush=True)
+                if not args.summarize:
+                    print('\rbatch', i + 1, 'of', (val_size - 1) // batch_size + 1, end='\r', flush=True)
 
-            val_inputs = val_inputs.to(device)
-            val_phase_labels = val_phase_labels.to(device)
-            anticipation = sample_anticipation(val_inputs.shape[0], device)
-            val_target_labels = create_future_phase_labels(val_phase_labels, anticipation)
+                val_inputs = val_inputs.to(device)
+                val_phase_labels = val_phase_labels.to(device)
+                anticipation = sample_anticipation(val_inputs.shape[0], device)
+                val_target_labels = create_future_phase_labels(val_phase_labels, anticipation)
 
-            # Forward pass
-            val_outputs, _ = model_forward(model, val_inputs, anticipation)
-            if val_outputs.shape[-1] != 2:
-                raise ValueError('Model must output [sin, cos] per frame. Got shape: ' + str(val_outputs.shape))
+                val_outputs, _ = model_forward(model, val_inputs, anticipation)
+                if val_outputs.shape[-1] != 2:
+                    raise ValueError('Model must output [sin, cos] per frame. Got shape: ' + str(val_outputs.shape))
 
-            # Compute the loss
-            loss = criterion(val_outputs, val_target_labels)
+                loss = criterion(val_outputs, val_target_labels)
 
-            total_loss += loss
-            total_batches += 1
+                total_loss += loss
+                total_batches += 1
 
-        avg_loss_sum += total_loss / total_batches
-        print()
-        print(f"Validation loss: {loss:.4f}")
+            avg_loss_sum += total_loss / total_batches
+            print()
+            print(f"Validation loss: {loss:.4f}")
+    else:
+        print('Validation skipped (dataset too small for split)')
 
     epoch_duration = time.time() - start_time
     toal_time += epoch_duration

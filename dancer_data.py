@@ -4,10 +4,13 @@ torch dataset implementation for loading phase chunks
 
 import os
 
-import torchaudio
+import numpy as np
+import soundfile
 import torch
 
 from torch.utils.data import Dataset
+
+import config
 
 def load_phase_labels(phase_file_path):
     values = []
@@ -44,26 +47,34 @@ class DanceDataset(Dataset):
         audio_file_path = os.path.join(self.path, chunk_name + ".ogg")
         phase_file_path = os.path.join(self.path, chunk_name + ".phase")
 
-        audio, samplerate = torchaudio.load(audio_file_path)
+        audio, samplerate = soundfile.read(audio_file_path, dtype='float32')
 
         assert samplerate == self.samplerate, "sample rate mismatch"
 
-        # convert to mono
-        audio = audio.mean(0)
+        # convert to mono if stereo
+        if audio.ndim == 2:
+            audio = audio.mean(axis=1)
+        audio = torch.from_numpy(audio)
         # normalize
-        audio = audio / audio.abs().max()
+        peak = audio.abs().max()
+        if peak > 0:
+            audio = audio / peak
 
-        number_of_frames = audio.shape[0] // self.frame_size
-        sequence_size = number_of_frames * self.frame_size
+        expected_frames = int(config.chunk_duration * self.samplerate) // self.frame_size
+        expected_samples = expected_frames * self.frame_size
+
+        # pad or truncate audio to exact length
+        if audio.shape[0] < expected_samples:
+            audio = torch.nn.functional.pad(audio, (0, expected_samples - audio.shape[0]))
+        else:
+            audio = audio[:expected_samples]
 
         phase_labels = load_phase_labels(phase_file_path)
-        number_of_frames = min(number_of_frames, phase_labels.shape[0])
-        sequence_size = number_of_frames * self.frame_size
+        if phase_labels.shape[0] < expected_frames:
+            phase_labels = torch.nn.functional.pad(phase_labels, (0, expected_frames - phase_labels.shape[0]))
+        else:
+            phase_labels = phase_labels[:expected_frames]
 
-        frames = audio[:sequence_size].reshape(number_of_frames, self.frame_size)
-        phase_labels = phase_labels[:number_of_frames]
-
-        assert number_of_frames == frames.shape[0], "sequence size mismatch"
-        assert number_of_frames == phase_labels.shape[0], "phase labels size mismatch"
+        frames = audio.reshape(expected_frames, self.frame_size)
 
         return frames, phase_labels, audio_file_path

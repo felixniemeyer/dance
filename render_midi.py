@@ -30,8 +30,8 @@ parser.add_argument('--bits', type=int, default=16,
 parser.add_argument('--max-song-length', type=int, default=60 * 20,
     help='max song length in seconds')
 
-parser.add_argument('--skip', type=int, default=0,
-    help='process only every nth song when --midi-path is used')
+parser.add_argument('--target-count', type=int, default=None,
+    help='stop after rendering this many songs (randomly sampled). Default: all.')
 parser.add_argument('--overwrite', default=False, action='store_true',
     help='overwrite existing files')
 parser.add_argument('--max-processes', type=int, default=9,
@@ -98,9 +98,9 @@ def generate_song(midifile, outpath, soundfonts, threads):
         duration = mid.length
 
         print(f'Song length: {duration:.2f} seconds')
-        if duration > args.max_song_length: # skip songs longer than 15 minutes.
+        if duration > args.max_song_length:
             print('Skipping song because it is too long: ' + str(mid.length))
-            return
+            return False
 
         print(f'Track count: {len(mid.tracks)}')
 
@@ -111,7 +111,7 @@ def generate_song(midifile, outpath, soundfonts, threads):
 
         if not has_valid_time_signature(time_signatures):
             print('Skipping ' + midifile + ' because it has no usable time signature data')
-            return
+            return False
 
         if not os.path.exists(outpath):
             os.makedirs(outpath, exist_ok=True)
@@ -125,13 +125,12 @@ def generate_song(midifile, outpath, soundfonts, threads):
         )
         if len(bar_starts) < 2:
             print('Skipping ' + midifile + ' because bar extraction failed')
-            return
+            return False
 
         write_bar_starts(bar_starts, outpath)
 
         for soundfont in soundfonts:
             outfile_without_ext = os.path.join(outpath, soundfont.name)
-            # call render_and_convert in a new thread
             thread = threading.Thread(target=render_and_convert, args=(render_midifile, outfile_without_ext, soundfont, duration + 60))
             threads.append(thread)
             thread.start()
@@ -141,9 +140,11 @@ def generate_song(midifile, outpath, soundfonts, threads):
                 threads[0].join()
                 threads.pop(0)
 
+        return True
+
     except Exception as error:
         print('Error processing ' + midifile + ': ' + str(error))
-        print(str(error))
+        return False
 
 def read_events(mid):
     tempo_changes = []
@@ -323,14 +324,12 @@ def render_and_convert(midifile, outfile_without_ext, soundfont, max_duration):
 
 def render(midifile, wavfile, soundfont):
     renderCommand = [
-        'timidity', 
+        'fluidsynth',
+        '--no-shell',
+        '--fast-render', wavfile,
+        '--sample-rate', str(samplerate),
+        soundfont.path,
         midifile,
-        '-Ow', 
-        '-o', wavfile,
-        '-s', str(samplerate),
-        '-A', str(args.bits),
-        '-x', f"soundfont '{soundfont.path}'",
-        '--preserve-silence'
     ]
 
     print(f"{' '.join(renderCommand)}")
@@ -340,14 +339,13 @@ def render(midifile, wavfile, soundfont):
         stderr=subprocess.PIPE
         ) as renderProcess:
 
-        # timidity_process.stdout.close()  # Close timidity's output stream to indicate it's done
-        render_stdout, render_stderr = renderProcess.communicate()  # Get timidity's output if needed
+        render_stdout, render_stderr = renderProcess.communicate()
         print(f'\nRendering terminated for {midifile}')
         if renderProcess.returncode != 0:
             print('Process returned non-zero exit code: ' + str(renderProcess.returncode))
         render_output = render_stdout.decode('utf-8')
         if render_output != '':
-            print('Render output' + render_output)
+            print('Render output: ' + render_output)
         render_errors = render_stderr.decode('utf-8')
         if render_errors != '':
             print('Render errors: ' + render_errors)
@@ -396,28 +394,29 @@ def main():
         generate_song(args.single_file, args.out_path, soundfonts, threads)
         sys.exit(0)
     else:
-        print('Rendering songs from ' + args.midi_path + '\n')
-        # for every song in every artist dir
-        count = 0
-        processed_count = 0
-        for artist in os.listdir(args.midi_path):
-            # continue if not a directory
-            if not os.path.isdir(args.midi_path + '/' + artist):
-                continue
-            for song in os.listdir(args.midi_path + '/' + artist):
-                if count % (args.skip + 1) == 0:
-                    midifile = args.midi_path + '/' + artist + '/' + song
-                    print(f"[{count}] processing {artist}/{song}")
+        from pathlib import Path
+        all_midi = list(Path(args.midi_path).rglob('*.mid'))
+        random.shuffle(all_midi)
 
-                    songname = song[0:-4]
-                    outpath = args.out_path + '/' + artist + '/' + songname + '/'
+        target = args.target_count if args.target_count is not None else len(all_midi)
+        print(f'Rendering songs from {args.midi_path}  ({len(all_midi)} found, target={target})\n')
 
-                    soundfont = soundfonts[processed_count % len(soundfonts)]
+        success_count = 0
+        attempt_count = 0
+        for midifile in all_midi:
+            if success_count >= target:
+                break
 
-                    generate_song(midifile, outpath, [soundfont], threads)
-                    processed_count += 1
+            rel = midifile.relative_to(args.midi_path).with_suffix('')
+            outpath = os.path.join(args.out_path, str(rel)) + '/'
 
-                count += 1
+            soundfont = random.choice(soundfonts)
+            attempt_count += 1
+            print(f"[{success_count + 1}/{target}] (attempt {attempt_count}) {rel}  sf={soundfont.name[:40]}")
+
+            ok = generate_song(str(midifile), outpath, [soundfont], threads)
+            if ok:
+                success_count += 1
 
     # wait for all threads to finish
     for thread in threads:
@@ -437,11 +436,10 @@ def find_soundfonts():
         print('Loading soundfonts from ' + args.soundfont_path)
         for root, _dirs, files in os.walk(args.soundfont_path):
             for file in files:
-                if file[-4:] == '.sf2': # timidity does not seem to handle sf3 files very well
-                    name = file[0:-4]
-                    print(name)
+                if file.endswith('.sf2'):  # timidity does not handle sf3 well
                     path = os.path.join(root, file)
-                    soundfonts.append(Soundfont(name, path))
+                    soundfonts.append(Soundfont(file[:-4], path))
+        print(f'Loaded {len(soundfonts)} soundfonts from {args.soundfont_path}')
     return soundfonts
 
 
