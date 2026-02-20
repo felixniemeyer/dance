@@ -11,9 +11,7 @@ import random
 
 import mido
 
-from audio_event import AudioEvent
-
-from  config import channels, relevant_notes, samplerate
+from config import channels, samplerate
 
 parser = argparse.ArgumentParser(description='Renders midi songs with soundfonts.')
 parser.add_argument('--midi-path', type=str, default='data/midi/lakh_clean',
@@ -68,12 +66,6 @@ class Soundfont:
         self.name = name
         self.path = path
 
-class NoteOnEvent:
-    def __init__(self, tick, note, velocity):
-        self.tick = tick
-        self.note = note
-        self.velocity = velocity
-
 class TempoChange:
     def __init__(self, tick, tempo):
         self.tick = tick
@@ -84,11 +76,6 @@ class TempoChange:
 
     def __repr__(self):
         return str(self)
-
-class VolumeChange:
-    def __init__(self, tick, volume):
-        self.tick = tick
-        self.volume = volume
 
 class TimeSignatureChange:
     def __init__(self, tick, numerator, denominator):
@@ -120,80 +107,61 @@ def generate_song(midifile, outpath, soundfonts, threads):
         ticks_per_beat = mid.ticks_per_beat
         print('ticks per beat: ' + str(ticks_per_beat))
 
-        note_ons, tempo_changes, volume_changes, time_signatures, max_tick = read_events(mid)
+        tempo_changes, time_signatures, max_tick = read_events(mid)
 
         if not has_valid_time_signature(time_signatures):
             print('Skipping ' + midifile + ' because it has no usable time signature data')
             return
 
-        if len(note_ons) < 20:
-            print('Skipping ' + midifile + ' because it has less than 20 relevant percussion events')
-        else:
-            if not os.path.exists(outpath):
-                os.makedirs(outpath, exist_ok=True)
+        if not os.path.exists(outpath):
+            os.makedirs(outpath, exist_ok=True)
 
-            audio_events = calc_audio_events(note_ons, tempo_changes, volume_changes, ticks_per_beat)
-            bar_starts = calc_bar_starts_in_seconds(
-                time_signatures,
-                tempo_changes,
-                ticks_per_beat,
-                max_tick,
-                note_ons[0].tick,
-            )
-            if len(bar_starts) < 2:
-                print('Skipping ' + midifile + ' because bar extraction failed')
-                return
+        bar_starts = calc_bar_starts_in_seconds(
+            time_signatures,
+            tempo_changes,
+            ticks_per_beat,
+            max_tick,
+            0,
+        )
+        if len(bar_starts) < 2:
+            print('Skipping ' + midifile + ' because bar extraction failed')
+            return
 
-            write_audio_events(audio_events, outpath)
-            write_bar_starts(bar_starts, outpath)
+        write_bar_starts(bar_starts, outpath)
 
-            for soundfont in soundfonts:
-                outfile_without_ext = os.path.join(outpath, soundfont.name)
-                # call render_and_convert in a new thread
-                thread = threading.Thread(target=render_and_convert, args=(render_midifile, outfile_without_ext, soundfont, duration + 60))
-                threads.append(thread)
-                thread.start()
-                print(f'Starting thread {len(threads)}/{args.max_processes}')
+        for soundfont in soundfonts:
+            outfile_without_ext = os.path.join(outpath, soundfont.name)
+            # call render_and_convert in a new thread
+            thread = threading.Thread(target=render_and_convert, args=(render_midifile, outfile_without_ext, soundfont, duration + 60))
+            threads.append(thread)
+            thread.start()
+            print(f'Starting thread {len(threads)}/{args.max_processes}')
 
-                while len(threads) >= args.max_processes:
-                    threads[0].join()
-                    threads.pop(0)
+            while len(threads) >= args.max_processes:
+                threads[0].join()
+                threads.pop(0)
 
     except Exception as error:
         print('Error processing ' + midifile + ': ' + str(error))
         print(str(error))
 
 def read_events(mid):
-    note_ons = []
     tempo_changes = []
-    volume_changes = []
     time_signatures = []
     max_tick = 0
 
-    for _, track in enumerate(mid.tracks):
-        # look for program change to drums
-
+    for track in mid.tracks:
         ticks = 0
-
         for msg in track:
             ticks += msg.time
             max_tick = max(max_tick, ticks)
             if msg.type == 'set_tempo':
                 tempo_changes.append(TempoChange(ticks, msg.tempo))
-            if msg.type == 'note_on':
-                if msg.channel == 9:
-                    if msg.note in relevant_notes:
-                        note_ons.append(NoteOnEvent(ticks, msg.note, msg.velocity))
-            if msg.type == 'control_change':
-                if msg.channel == 9 and msg.control == 7:
-                    volume_changes.append(VolumeChange(ticks, msg.value))
             if msg.type == 'time_signature':
                 time_signatures.append(TimeSignatureChange(ticks, msg.numerator, msg.denominator))
 
     # sort everything because it may come from different tracks
     tempo_changes.sort(key=lambda x: x.tick)
-    volume_changes.sort(key=lambda x: x.tick)
-    note_ons.sort(key=lambda x: x.tick)
     time_signatures.sort(key=lambda x: x.tick)
 
     deduped_time_signatures = []
@@ -203,53 +171,7 @@ def read_events(mid):
         else:
             deduped_time_signatures[-1] = ts
 
-    return note_ons, tempo_changes, volume_changes, deduped_time_signatures, max_tick
-
-def calc_audio_events(note_ons, tempo_changes, volume_changes, ticks_per_beat):
-    # initialize results array
-    audio_events = []
-
-    # initial tempo
-    tempo = 500000
-    tcp = 0 # tempo change pointer
-    accumulated_time = 0
-    accumulated_ticks = 0
-
-    # initial volume
-    volume = 100
-    vcp = 0 # volume change pointer
-
-    # add noteOns with same tick
-    for note_on in note_ons:
-        tick = note_on.tick
-
-        # respect tempo_changes
-        while tcp < len(tempo_changes) and tempo_changes[tcp].tick <= tick:
-            accumulated_time += mido.tick2second(tempo_changes[tcp].tick - accumulated_ticks, ticks_per_beat, tempo)
-            accumulated_ticks = tempo_changes[tcp].tick
-            tempo = tempo_changes[tcp].tempo
-            tcp += 1
-
-        while vcp < len(volume_changes) and volume_changes[vcp].tick <= tick:
-            volume = volume_changes[vcp].volume
-            vcp += 1
-
-        event_time = accumulated_time + mido.tick2second(tick - accumulated_ticks, ticks_per_beat, tempo)
-        event_volume = (note_on.velocity / 127 * 0.5 + 0.5) * volume / 127
-
-        audio_events.append(AudioEvent(event_time, note_on.note, event_volume))
-
-    audio_events.sort(key=lambda x: x.time)
-
-    return audio_events
-
-def write_audio_events(audio_events, outpath):
-    print('Writing audio events to file')
-    # write audio events to a file
-    events_file_path = os.path.join(outpath, 'events.csv')
-    with open(events_file_path, 'w', encoding='utf-8') as event_file:
-        for event in audio_events:
-            event_file.write(event.to_csv_line() + '\n')
+    return tempo_changes, deduped_time_signatures, max_tick
 
 def write_bar_starts(bar_starts, outpath):
     print('Writing bar starts to file')
