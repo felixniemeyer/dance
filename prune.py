@@ -36,6 +36,10 @@ from pathlib import Path
 from multiprocessing import Pool, cpu_count
 
 import mido
+from tqdm import tqdm
+
+# Bump this string whenever filter logic changes — invalidates all existing markers.
+PRUNE_VERSION = "1"
 
 # ── MIDI thresholds ────────────────────────────────────────────────────────────
 MIN_DURATION = 30       # seconds
@@ -85,7 +89,10 @@ def check_midi(path: Path):
     except Exception as e:
         return False, f"parse error: {e}"
 
-    duration = mid.length
+    try:
+        duration = mid.length
+    except Exception as e:
+        return False, f"parse error: {e}"
     if duration < MIN_DURATION:
         return False, f"too short ({duration:.0f}s < {MIN_DURATION}s)"
     if duration > MAX_DURATION:
@@ -115,12 +122,78 @@ def check_midi(path: Path):
     return True, f"dur={duration:.0f}s ts={ts_label}"
 
 
+# ── Marker helpers ─────────────────────────────────────────────────────────────
+
+def _marker_path(midi_path: Path) -> Path:
+    return midi_path.with_suffix('.mid.prune_ok')
+
+def _has_valid_marker(midi_path: Path) -> bool:
+    try:
+        return _marker_path(midi_path).read_text().strip() == PRUNE_VERSION
+    except OSError:
+        return False
+
+def _write_marker(midi_path: Path):
+    try:
+        _marker_path(midi_path).write_text(PRUNE_VERSION)
+    except OSError:
+        pass
+
+
+# ── Fast binary MIDI check (no mido) ──────────────────────────────────────────
+
+def check_midi_fast(path: Path):
+    """
+    Lightweight binary scan — no mido, no Python objects per event.
+    Checks: magic bytes, format type, SMPTE flag, time-signature presence.
+    Does NOT check duration (requires full tempo parse) or tick-0 placement.
+    Faster than check_midi but slightly less strict — use as a first pass.
+    Returns (keep: bool, reason: str).
+    """
+    try:
+        size = path.stat().st_size
+        if size < 200:
+            return False, "too small"
+
+        with open(path, 'rb') as f:
+            hdr = f.read(14)
+
+        if len(hdr) < 14 or hdr[:4] != b'MThd':
+            return False, "not a MIDI file (bad magic)"
+
+        fmt      = struct.unpack('>H', hdr[8:10])[0]
+        division = struct.unpack('>H', hdr[12:14])[0]
+
+        if fmt == 2:
+            return False, "type 2 (asynchronous) MIDI"
+        if division & 0x8000:
+            return False, "SMPTE timecode (not tempo-based)"
+
+        # Scan raw bytes for time-signature meta event marker: FF 58 04
+        data = path.read_bytes()
+        if b'\xff\x58\x04' not in data:
+            return False, "no time-signature events"
+
+        return True, "fast-pass ok"
+    except Exception as e:
+        return False, f"parse error: {e}"
+
+
 def _check_midi_worker(args):
-    path, delete = args
-    keep, reason = check_midi(path)
-    if not keep and delete:
+    path, delete, fast, use_markers = args
+
+    if use_markers and _has_valid_marker(path):
+        return path, True, 'marker'
+
+    check_fn = check_midi_fast if fast else check_midi
+    keep, reason = check_fn(path)
+
+    if keep and use_markers:
+        _write_marker(path)
+    elif not keep and delete:
         try:
             path.unlink()
+            _marker_path(path).unlink(missing_ok=True)
         except OSError:
             pass
     return path, keep, reason
@@ -211,33 +284,43 @@ def check_soundfont(path: Path, min_gm_families: int = MIN_GM_FAMILIES):
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
-def process_midi(midi_path: Path, delete: bool, workers: int):
+def process_midi(midi_path: Path, delete: bool, workers: int, fast: bool, use_markers: bool):
     files = sorted(midi_path.rglob('*.mid'))
     total = len(files)
+    mode  = 'fast' if fast else 'mido'
     print(f"\n{'='*60}")
-    print(f"MIDI: scanning {total} files in {midi_path}  (workers={workers})")
+    print(f"MIDI: scanning {total} files in {midi_path}  (workers={workers}, mode={mode}, markers={'on' if use_markers else 'off'})")
     print(f"{'='*60}")
 
     kept    = 0
     pruned  = 0
+    skipped = 0
     reasons = {}
 
-    args_iter = ((f, delete) for f in files)
+    args_iter  = ((f, delete, fast, use_markers) for f in files)
+    prune_lines = []
 
     with Pool(processes=workers) as pool:
-        for i, (f, keep, reason) in enumerate(pool.imap_unordered(_check_midi_worker, args_iter, chunksize=64)):
-            if i % 5000 == 0 and i > 0:
-                print(f"  ... {i}/{total}  kept={kept}  pruned={pruned}")
-            if keep:
-                kept += 1
-            else:
-                pruned += 1
-                tag = reason.split('(')[0].split(':')[0].strip()
-                reasons[tag] = reasons.get(tag, 0) + 1
-                if not delete:
-                    print(f"  PRUNE  {f.relative_to(midi_path)}  — {reason}")
+        with tqdm(total=total, unit='file', dynamic_ncols=True) as bar:
+            for f, keep, reason in pool.imap_unordered(_check_midi_worker, args_iter, chunksize=64):
+                if reason == 'marker':
+                    skipped += 1
+                    kept += 1
+                elif keep:
+                    kept += 1
+                else:
+                    pruned += 1
+                    tag = reason.split('(')[0].split(':')[0].strip()
+                    reasons[tag] = reasons.get(tag, 0) + 1
+                    if not delete:
+                        prune_lines.append(f"  PRUNE  {f.relative_to(midi_path)}  — {reason}")
+                bar.set_postfix(kept=kept, pruned=pruned, skip=skipped, refresh=False)
+                bar.update(1)
 
-    print(f"\nMIDI summary: kept={kept}  pruned={pruned}  total={total}")
+    for line in prune_lines:
+        print(line)
+
+    print(f"\nMIDI summary: kept={kept}  pruned={pruned}  skipped(marker)={skipped}  total={total}")
     if reasons:
         print("  Prune reasons:")
         for r, n in sorted(reasons.items(), key=lambda x: -x[1]):
@@ -288,6 +371,10 @@ def main():
                         help='Parallel worker processes for MIDI scanning (default: cpu_count-1)')
     parser.add_argument('--min-gm-families', type=int, default=MIN_GM_FAMILIES,
                         help=f'Min GM instrument families required in bank 0 (default: {MIN_GM_FAMILIES}/16)')
+    parser.add_argument('--fast', action='store_true',
+                        help='Use fast binary scanner instead of mido (skips duration check, less strict)')
+    parser.add_argument('--no-markers', action='store_true',
+                        help='Disable marker files (always re-scan every file)')
     args = parser.parse_args()
 
     if args.midi_path is None and args.sf_path is None:
@@ -296,8 +383,12 @@ def main():
     if not args.delete:
         print("DRY RUN — pass --delete to actually remove files")
 
+    use_markers = not args.no_markers
+    if use_markers:
+        print(f"Markers enabled (version={PRUNE_VERSION}) — already-passed files will be skipped")
+
     if args.midi_path:
-        process_midi(args.midi_path, args.delete, args.workers)
+        process_midi(args.midi_path, args.delete, args.workers, args.fast, use_markers)
     if args.sf_path:
         process_soundfonts(args.sf_path, args.delete, args.min_gm_families)
 

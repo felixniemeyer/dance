@@ -230,6 +230,8 @@ for epoch in range(first_epoch, last_epoch):
 
     model.train()  # Set the model to training mode
     start_time = time.time()
+    train_total_loss = 0
+    train_num_batches = 0
 
     for i, (batch_inputs, phase_labels, _) in enumerate(train_loader):
 
@@ -264,8 +266,11 @@ for epoch in range(first_epoch, last_epoch):
         backpropagation_time = time.time() - start_calc
 
         optimizer.step()
+        train_total_loss += loss.item()
+        train_num_batches += 1
 
     print()
+    print(f"Training loss:   {train_total_loss / train_num_batches:.4f}")
 
     scheduler.step()
 

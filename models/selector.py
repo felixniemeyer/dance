@@ -14,6 +14,7 @@ from .v2_coolio import V2Coolio
 from .cr import CR
 from .crs import CRS
 from .phase_tcn import PhaseTCN
+from .phase_tcn_mel import PhaseTCNMel
 
 models = {
     'cnn_only': CNNOnly,
@@ -30,6 +31,7 @@ models = {
     'CR': CR,
     'CRS': CRS,
     'phase_tcn': PhaseTCN,
+    'phase_tcn_mel': PhaseTCNMel,
 }
 
 def getModels():

@@ -312,7 +312,8 @@ def render_and_convert(midifile, outfile_without_ext, soundfont, max_duration):
         print(f'Skipping because {wavfile} already exists')
         return 1
 
-    ok = render(midifile, wavfile, soundfont)
+    render_timeout = max(120, max_duration * 10)
+    ok = render(midifile, wavfile, soundfont, render_timeout)
 
     if ok:
         convert(midifile, wavfile, oggfile, max_duration)
@@ -322,7 +323,7 @@ def render_and_convert(midifile, outfile_without_ext, soundfont, max_duration):
     return 0
 
 
-def render(midifile, wavfile, soundfont):
+def render(midifile, wavfile, soundfont, timeout_s):
     renderCommand = [
         'fluidsynth',
         '--no-shell',
@@ -339,7 +340,14 @@ def render(midifile, wavfile, soundfont):
         stderr=subprocess.PIPE
         ) as renderProcess:
 
-        render_stdout, render_stderr = renderProcess.communicate()
+        try:
+            render_stdout, render_stderr = renderProcess.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            renderProcess.kill()
+            render_stdout, render_stderr = renderProcess.communicate()
+            print(f'\nRender timed out after {timeout_s:.0f}s, killed: {midifile}')
+            return False
+
         print(f'\nRendering terminated for {midifile}')
         if renderProcess.returncode != 0:
             print('Process returned non-zero exit code: ' + str(renderProcess.returncode))
