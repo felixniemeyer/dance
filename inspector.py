@@ -137,8 +137,10 @@ def load_chunk(chunk_name):
     with open(phase_path) as f:
         phase = np.array([float(l) for l in f if l.strip()], dtype=np.float32)
 
-    duration    = len(audio) / sr
-    frame_dur   = duration / len(phase)
+    duration = len(audio) / sr
+    # Labels are written per frame at fixed frame size, and may include
+    # extra look-ahead horizon beyond audio duration.
+    frame_dur = config.frame_size / sr
     phase_times = np.arange(len(phase)) * frame_dur + frame_dur / 2
 
     audio_times, audio_ds, _ = _downsample_waveform(audio, sr)
@@ -180,8 +182,7 @@ def run_inference(checkpoint_rel, audio_path, anticipation_s):
     else:
         phases = out[0, :, 0].numpy()
 
-    duration  = length / sr
-    frame_dur = duration / frames_n
+    frame_dur = config.frame_size / sr
     times = np.arange(frames_n) * frame_dur + frame_dur / 2
     return times, phases
 
