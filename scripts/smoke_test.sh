@@ -12,9 +12,8 @@ cd "$ROOT_DIR"
 PYTHON_BIN="${PYTHON_BIN:-venv/bin/python}"
 DEVICE_TYPE="${DEVICE_TYPE:-cpu}"
 
-MIDI_PATH="${MIDI_PATH:-midi_files/lakh-midi/Goo_Goo_Dolls}"
+MIDI_PATH="${MIDI_PATH:-midi_files/}"
 SOUNDFONT_PATH="${SOUNDFONT_PATH:-soundfonts}"
-SOUNDFONT_FILE="${SOUNDFONT_FILE:-soundfonts/FluidR3_GM.sf2}"
 
 RUN_ID="${RUN_ID:-smoke-$(date +%Y%m%d-%H%M%S)}"
 CHUNKS_PATH="${CHUNKS_PATH:-chunks/${RUN_ID}}"
@@ -37,11 +36,6 @@ if [[ ! -d "$SOUNDFONT_PATH" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$SOUNDFONT_FILE" ]]; then
-  echo "soundfont file not found: $SOUNDFONT_FILE"
-  exit 1
-fi
-
 if [[ -z "$(find "$MIDI_PATH" -type f -name "*.mid" -print -quit)" ]]; then
   echo "no .mid files found under: $MIDI_PATH"
   exit 1
@@ -57,7 +51,6 @@ echo "python:         $PYTHON_BIN"
 echo "device:         $DEVICE_TYPE"
 echo "midi path:      $MIDI_PATH"
 echo "soundfont path: $SOUNDFONT_PATH"
-echo "soundfont file: $SOUNDFONT_FILE"
 echo "run id:         $RUN_ID"
 echo "chunks path:    $CHUNKS_PATH"
 echo "tag:            $TAG"
@@ -69,7 +62,6 @@ echo "== Step 1/3: render_and_chop (1 random song) =="
 "$PYTHON_BIN" render_and_chop.py \
   --midi-path "$MIDI_PATH" \
   --soundfont-path "$SOUNDFONT_PATH" \
-  --single-soundfont "$SOUNDFONT_FILE" \
   --out-path "$CHUNKS_PATH" \
   --target-count 1 \
   --max-song-length 300 \
