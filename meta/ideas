@@ -86,3 +86,14 @@ Experimente
   - sometimes combine one song with another
   - audio and kicks.txt and snare.txt
 
+//
+
+Pipeline robustness and maintenance:
+- add MIDI quality scoring by scanning note-pattern frequencies (beyond time-signature checks)
+  - detect suspicious files where note-grid/fraction patterns are inconsistent over time
+- add explicit speed modulation augmentation in audio rendering/chunking
+  - train for moving tempo/speed scenarios (slower/faster playback)
+- treat training as an ongoing process, not a one-off run
+  - keep retraining easy on new data
+  - keep reproducible scripts/configs for recurring model maintenance
+  - track data versions + prune criteria + training recipes over time

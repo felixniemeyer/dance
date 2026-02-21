@@ -61,6 +61,14 @@ parser.add_argument('--midi-jitter-max-seconds', type=float, default=0.05,
 parser.add_argument('--overwrite', default=False, action='store_true')
 parser.add_argument('--render-timeout-seconds', type=float, default=None,
     help='hard timeout for one MIDI render call. If not set, timeout scales with song length.')
+parser.add_argument('--phase-grid-denominator', type=int, default=16,
+    help='phase alignment grid denominator (e.g. 16 checks 1/16 bar steps)')
+parser.add_argument('--note-phase-tolerance', type=float, default=0.035,
+    help='max phase error to count a note as grid-aligned')
+parser.add_argument('--min-aligned-note-ratio', type=float, default=0.6,
+    help='minimum fraction of note-on ticks that must align to grid')
+parser.add_argument('--min-notes-for-alignment-check', type=int, default=24,
+    help='minimum unique note-on ticks required for alignment check')
 args = parser.parse_args()
 
 os.makedirs(args.out_path, exist_ok=True)
@@ -119,6 +127,49 @@ def has_valid_time_signature(time_signatures):
         if ts.numerator <= 0 or ts.denominator not in [1, 2, 4, 8, 16, 32]:
             return False
     return True
+
+def read_note_on_ticks(mid):
+    note_ticks = set()
+    for track in mid.tracks:
+        ticks = 0
+        for msg in track:
+            ticks += msg.time
+            if msg.type == 'note_on' and getattr(msg, 'velocity', 0) > 0:
+                note_ticks.add(ticks)
+    return sorted(note_ticks)
+
+def has_note_phase_alignment(note_ticks, time_signatures, ticks_per_beat):
+    if len(note_ticks) < args.min_notes_for_alignment_check:
+        return False, 0.0, len(note_ticks)
+    if args.phase_grid_denominator <= 0:
+        return False, 0.0, len(note_ticks)
+
+    ts_index = 0
+    aligned = 0
+    total = 0
+
+    for tick in note_ticks:
+        while ts_index + 1 < len(time_signatures) and time_signatures[ts_index + 1].tick <= tick:
+            ts_index += 1
+
+        ts = time_signatures[ts_index]
+        bar_ticks = int(ticks_per_beat * 4 * ts.numerator / ts.denominator)
+        if bar_ticks <= 0:
+            continue
+
+        phase = ((tick - ts.tick) % bar_ticks) / bar_ticks
+        scaled = phase * args.phase_grid_denominator
+        nearest_error = abs(scaled - round(scaled)) / args.phase_grid_denominator
+
+        if nearest_error <= args.note_phase_tolerance:
+            aligned += 1
+        total += 1
+
+    if total == 0:
+        return False, 0.0, len(note_ticks)
+
+    ratio = aligned / total
+    return ratio >= args.min_aligned_note_ratio, ratio, total
 
 
 def ticks_to_seconds(ticks, tempo_changes, ticks_per_beat):
@@ -443,6 +494,13 @@ def main():
             tempo_changes, time_signatures, max_tick = read_events(mid)
             if not has_valid_time_signature(time_signatures):
                 print('  No valid time signature, skipping')
+                continue
+            note_ticks = read_note_on_ticks(mid)
+            aligned_ok, aligned_ratio, aligned_count = has_note_phase_alignment(
+                note_ticks, time_signatures, mid.ticks_per_beat
+            )
+            if not aligned_ok:
+                print(f'  Poor note/grid alignment ({aligned_ratio:.2f} over {aligned_count} notes), skipping')
                 continue
             bar_starts = calc_bar_starts_in_seconds(
                 time_signatures, tempo_changes, mid.ticks_per_beat, max_tick)
