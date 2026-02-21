@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # End-to-end smoke test for the phase pipeline:
-# 1) render one MIDI with one soundfont
+# 1) render one random MIDI with one random soundfont
 # 2) chop into phase chunks
 # 3) train one epoch
 # 4) run inference on one chunk
@@ -13,8 +13,8 @@ cd "$ROOT_DIR"
 PYTHON_BIN="${PYTHON_BIN:-venv/bin/python}"
 DEVICE_TYPE="${DEVICE_TYPE:-cpu}"
 
-MIDI_FILE="${MIDI_FILE:-data/midi/lakh-midi/Goo_Goo_Dolls/Name.mid}"
-SOUNDFONT_FILE="${SOUNDFONT_FILE:-soundfonts/FluidR3_GM.sf2}"
+MIDI_PATH="${MIDI_PATH:-midi_files/lmd_matched}"
+SOUNDFONT_PATH="${SOUNDFONT_PATH:-data}"
 
 RUN_ID="${RUN_ID:-smoke-$(date +%Y%m%d-%H%M%S)}"
 RENDER_ROOT="${RENDER_ROOT:-data/rendered_midi/${RUN_ID}}"
@@ -28,45 +28,30 @@ if [[ ! -x "$PYTHON_BIN" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$MIDI_FILE" ]]; then
-  echo "midi file not found: $MIDI_FILE"
-  exit 1
-fi
-
-if [[ ! -f "$SOUNDFONT_FILE" ]]; then
-  echo "soundfont file not found: $SOUNDFONT_FILE"
-  exit 1
-fi
-
 echo "== Smoke Test =="
-echo "python:        $PYTHON_BIN"
-echo "device:        $DEVICE_TYPE"
-echo "midi:          $MIDI_FILE"
-echo "soundfont:     $SOUNDFONT_FILE"
-echo "run id:        $RUN_ID"
-echo "render root:   $RENDER_ROOT"
-echo "chunks path:   $CHUNKS_PATH"
-echo "tag:           $TAG"
-if [[ -n "$SMOKE_DATASET_SIZE" ]]; then
-  echo "dataset size:  $SMOKE_DATASET_SIZE"
-else
-  echo "dataset size:  full smoke set"
-fi
+echo "python:         $PYTHON_BIN"
+echo "device:         $DEVICE_TYPE"
+echo "midi path:      $MIDI_PATH"
+echo "soundfont path: $SOUNDFONT_PATH"
+echo "run id:         $RUN_ID"
+echo "render root:    $RENDER_ROOT"
+echo "chunks path:    $CHUNKS_PATH"
+echo "tag:            $TAG"
 echo
 
 mkdir -p "$RENDER_ROOT" "$CHUNKS_PATH" "$CHECKPOINTS_PATH"
 
-echo "== Step 1/4: render_midi =="
+echo "== Step 1/4: render_midi (1 random song) =="
 "$PYTHON_BIN" render_midi.py \
-  --single-file "$MIDI_FILE" \
-  --single-soundfont "$SOUNDFONT_FILE" \
-  --out-path "$RENDER_ROOT/single/song" \
-  --midi-jitter-max-seconds 0.05 \
+  --midi-path "$MIDI_PATH" \
+  --soundfont-path "$SOUNDFONT_PATH" \
+  --out-path "$RENDER_ROOT" \
+  --target-count 3 \
   --max-processes 1 \
   --overwrite
 
-if [[ ! -f "$RENDER_ROOT/single/song/events.csv" || ! -f "$RENDER_ROOT/single/song/bars.csv" ]]; then
-  echo "render output missing events.csv or bars.csv in $RENDER_ROOT/single/song"
+if ! find "$RENDER_ROOT" -name "bars.csv" | grep -q .; then
+  echo "render output missing bars.csv under $RENDER_ROOT"
   exit 1
 fi
 
@@ -122,6 +107,6 @@ fi
 
 echo
 echo "Smoke test completed successfully."
-echo "checkpoint:     $CHECKPOINT_FILE"
-echo "chunk:          $CHUNK_FILE"
-echo "prediction:     $PRED_FILE"
+echo "checkpoint:  $CHECKPOINT_FILE"
+echo "chunk:       $CHUNK_FILE"
+echo "prediction:  $PRED_FILE"

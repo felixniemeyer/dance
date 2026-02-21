@@ -11,9 +11,7 @@ import random
 
 import mido
 
-from audio_event import AudioEvent
-
-from  config import channels, relevant_notes, samplerate
+from config import channels, samplerate
 
 parser = argparse.ArgumentParser(description='Renders midi songs with soundfonts.')
 parser.add_argument('--midi-path', type=str, default='data/midi/lakh_clean',
@@ -32,8 +30,8 @@ parser.add_argument('--bits', type=int, default=16,
 parser.add_argument('--max-song-length', type=int, default=60 * 20,
     help='max song length in seconds')
 
-parser.add_argument('--skip', type=int, default=0,
-    help='process only every nth song when --midi-path is used')
+parser.add_argument('--target-count', type=int, default=None,
+    help='stop after rendering this many songs (randomly sampled). Default: all.')
 parser.add_argument('--overwrite', default=False, action='store_true',
     help='overwrite existing files')
 parser.add_argument('--max-processes', type=int, default=9,
@@ -68,12 +66,6 @@ class Soundfont:
         self.name = name
         self.path = path
 
-class NoteOnEvent:
-    def __init__(self, tick, note, velocity):
-        self.tick = tick
-        self.note = note
-        self.velocity = velocity
-
 class TempoChange:
     def __init__(self, tick, tempo):
         self.tick = tick
@@ -84,11 +76,6 @@ class TempoChange:
 
     def __repr__(self):
         return str(self)
-
-class VolumeChange:
-    def __init__(self, tick, volume):
-        self.tick = tick
-        self.volume = volume
 
 class TimeSignatureChange:
     def __init__(self, tick, numerator, denominator):
@@ -111,89 +98,71 @@ def generate_song(midifile, outpath, soundfonts, threads):
         duration = mid.length
 
         print(f'Song length: {duration:.2f} seconds')
-        if duration > args.max_song_length: # skip songs longer than 15 minutes.
+        if duration > args.max_song_length:
             print('Skipping song because it is too long: ' + str(mid.length))
-            return
+            return False
 
         print(f'Track count: {len(mid.tracks)}')
 
         ticks_per_beat = mid.ticks_per_beat
         print('ticks per beat: ' + str(ticks_per_beat))
 
-        note_ons, tempo_changes, volume_changes, time_signatures, max_tick = read_events(mid)
+        tempo_changes, time_signatures, max_tick = read_events(mid)
 
         if not has_valid_time_signature(time_signatures):
             print('Skipping ' + midifile + ' because it has no usable time signature data')
-            return
+            return False
 
-        if len(note_ons) < 20:
-            print('Skipping ' + midifile + ' because it has less than 20 relevant percussion events')
-        else:
-            if not os.path.exists(outpath):
-                os.makedirs(outpath, exist_ok=True)
+        if not os.path.exists(outpath):
+            os.makedirs(outpath, exist_ok=True)
 
-            audio_events = calc_audio_events(note_ons, tempo_changes, volume_changes, ticks_per_beat)
-            bar_starts = calc_bar_starts_in_seconds(
-                time_signatures,
-                tempo_changes,
-                ticks_per_beat,
-                max_tick,
-                note_ons[0].tick,
-            )
-            if len(bar_starts) < 2:
-                print('Skipping ' + midifile + ' because bar extraction failed')
-                return
+        bar_starts = calc_bar_starts_in_seconds(
+            time_signatures,
+            tempo_changes,
+            ticks_per_beat,
+            max_tick,
+            0,
+        )
+        if len(bar_starts) < 2:
+            print('Skipping ' + midifile + ' because bar extraction failed')
+            return False
 
-            write_audio_events(audio_events, outpath)
-            write_bar_starts(bar_starts, outpath)
+        write_bar_starts(bar_starts, outpath)
 
-            for soundfont in soundfonts:
-                outfile_without_ext = os.path.join(outpath, soundfont.name)
-                # call render_and_convert in a new thread
-                thread = threading.Thread(target=render_and_convert, args=(render_midifile, outfile_without_ext, soundfont, duration + 60))
-                threads.append(thread)
-                thread.start()
-                print(f'Starting thread {len(threads)}/{args.max_processes}')
+        for soundfont in soundfonts:
+            outfile_without_ext = os.path.join(outpath, soundfont.name)
+            thread = threading.Thread(target=render_and_convert, args=(render_midifile, outfile_without_ext, soundfont, duration + 60))
+            threads.append(thread)
+            thread.start()
+            print(f'Starting thread {len(threads)}/{args.max_processes}')
 
-                while len(threads) >= args.max_processes:
-                    threads[0].join()
-                    threads.pop(0)
+            while len(threads) >= args.max_processes:
+                threads[0].join()
+                threads.pop(0)
+
+        return True
 
     except Exception as error:
         print('Error processing ' + midifile + ': ' + str(error))
-        print(str(error))
+        return False
 
 def read_events(mid):
-    note_ons = []
     tempo_changes = []
-    volume_changes = []
     time_signatures = []
     max_tick = 0
 
-    for _, track in enumerate(mid.tracks):
-        # look for program change to drums
-
+    for track in mid.tracks:
         ticks = 0
-
         for msg in track:
             ticks += msg.time
             max_tick = max(max_tick, ticks)
             if msg.type == 'set_tempo':
                 tempo_changes.append(TempoChange(ticks, msg.tempo))
-            if msg.type == 'note_on':
-                if msg.channel == 9:
-                    if msg.note in relevant_notes:
-                        note_ons.append(NoteOnEvent(ticks, msg.note, msg.velocity))
-            if msg.type == 'control_change':
-                if msg.channel == 9 and msg.control == 7:
-                    volume_changes.append(VolumeChange(ticks, msg.value))
             if msg.type == 'time_signature':
                 time_signatures.append(TimeSignatureChange(ticks, msg.numerator, msg.denominator))
 
     # sort everything because it may come from different tracks
     tempo_changes.sort(key=lambda x: x.tick)
-    volume_changes.sort(key=lambda x: x.tick)
-    note_ons.sort(key=lambda x: x.tick)
     time_signatures.sort(key=lambda x: x.tick)
 
     deduped_time_signatures = []
@@ -203,53 +172,7 @@ def read_events(mid):
         else:
             deduped_time_signatures[-1] = ts
 
-    return note_ons, tempo_changes, volume_changes, deduped_time_signatures, max_tick
-
-def calc_audio_events(note_ons, tempo_changes, volume_changes, ticks_per_beat):
-    # initialize results array
-    audio_events = []
-
-    # initial tempo
-    tempo = 500000
-    tcp = 0 # tempo change pointer
-    accumulated_time = 0
-    accumulated_ticks = 0
-
-    # initial volume
-    volume = 100
-    vcp = 0 # volume change pointer
-
-    # add noteOns with same tick
-    for note_on in note_ons:
-        tick = note_on.tick
-
-        # respect tempo_changes
-        while tcp < len(tempo_changes) and tempo_changes[tcp].tick <= tick:
-            accumulated_time += mido.tick2second(tempo_changes[tcp].tick - accumulated_ticks, ticks_per_beat, tempo)
-            accumulated_ticks = tempo_changes[tcp].tick
-            tempo = tempo_changes[tcp].tempo
-            tcp += 1
-
-        while vcp < len(volume_changes) and volume_changes[vcp].tick <= tick:
-            volume = volume_changes[vcp].volume
-            vcp += 1
-
-        event_time = accumulated_time + mido.tick2second(tick - accumulated_ticks, ticks_per_beat, tempo)
-        event_volume = (note_on.velocity / 127 * 0.5 + 0.5) * volume / 127
-
-        audio_events.append(AudioEvent(event_time, note_on.note, event_volume))
-
-    audio_events.sort(key=lambda x: x.time)
-
-    return audio_events
-
-def write_audio_events(audio_events, outpath):
-    print('Writing audio events to file')
-    # write audio events to a file
-    events_file_path = os.path.join(outpath, 'events.csv')
-    with open(events_file_path, 'w', encoding='utf-8') as event_file:
-        for event in audio_events:
-            event_file.write(event.to_csv_line() + '\n')
+    return tempo_changes, deduped_time_signatures, max_tick
 
 def write_bar_starts(bar_starts, outpath):
     print('Writing bar starts to file')
@@ -389,7 +312,8 @@ def render_and_convert(midifile, outfile_without_ext, soundfont, max_duration):
         print(f'Skipping because {wavfile} already exists')
         return 1
 
-    ok = render(midifile, wavfile, soundfont)
+    render_timeout = max(120, max_duration * 10)
+    ok = render(midifile, wavfile, soundfont, render_timeout)
 
     if ok:
         convert(midifile, wavfile, oggfile, max_duration)
@@ -399,16 +323,14 @@ def render_and_convert(midifile, outfile_without_ext, soundfont, max_duration):
     return 0
 
 
-def render(midifile, wavfile, soundfont):
+def render(midifile, wavfile, soundfont, timeout_s):
     renderCommand = [
-        'timidity', 
+        'fluidsynth',
+        '--no-shell',
+        '--fast-render', wavfile,
+        '--sample-rate', str(samplerate),
+        soundfont.path,
         midifile,
-        '-Ow', 
-        '-o', wavfile,
-        '-s', str(samplerate),
-        '-A', str(args.bits),
-        '-x', f"soundfont '{soundfont.path}'",
-        '--preserve-silence'
     ]
 
     print(f"{' '.join(renderCommand)}")
@@ -418,14 +340,20 @@ def render(midifile, wavfile, soundfont):
         stderr=subprocess.PIPE
         ) as renderProcess:
 
-        # timidity_process.stdout.close()  # Close timidity's output stream to indicate it's done
-        render_stdout, render_stderr = renderProcess.communicate()  # Get timidity's output if needed
+        try:
+            render_stdout, render_stderr = renderProcess.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            renderProcess.kill()
+            render_stdout, render_stderr = renderProcess.communicate()
+            print(f'\nRender timed out after {timeout_s:.0f}s, killed: {midifile}')
+            return False
+
         print(f'\nRendering terminated for {midifile}')
         if renderProcess.returncode != 0:
             print('Process returned non-zero exit code: ' + str(renderProcess.returncode))
         render_output = render_stdout.decode('utf-8')
         if render_output != '':
-            print('Render output' + render_output)
+            print('Render output: ' + render_output)
         render_errors = render_stderr.decode('utf-8')
         if render_errors != '':
             print('Render errors: ' + render_errors)
@@ -474,28 +402,29 @@ def main():
         generate_song(args.single_file, args.out_path, soundfonts, threads)
         sys.exit(0)
     else:
-        print('Rendering songs from ' + args.midi_path + '\n')
-        # for every song in every artist dir
-        count = 0
-        processed_count = 0
-        for artist in os.listdir(args.midi_path):
-            # continue if not a directory
-            if not os.path.isdir(args.midi_path + '/' + artist):
-                continue
-            for song in os.listdir(args.midi_path + '/' + artist):
-                if count % (args.skip + 1) == 0:
-                    midifile = args.midi_path + '/' + artist + '/' + song
-                    print(f"[{count}] processing {artist}/{song}")
+        from pathlib import Path
+        all_midi = list(Path(args.midi_path).rglob('*.mid'))
+        random.shuffle(all_midi)
 
-                    songname = song[0:-4]
-                    outpath = args.out_path + '/' + artist + '/' + songname + '/'
+        target = args.target_count if args.target_count is not None else len(all_midi)
+        print(f'Rendering songs from {args.midi_path}  ({len(all_midi)} found, target={target})\n')
 
-                    soundfont = soundfonts[processed_count % len(soundfonts)]
+        success_count = 0
+        attempt_count = 0
+        for midifile in all_midi:
+            if success_count >= target:
+                break
 
-                    generate_song(midifile, outpath, [soundfont], threads)
-                    processed_count += 1
+            rel = midifile.relative_to(args.midi_path).with_suffix('')
+            outpath = os.path.join(args.out_path, str(rel)) + '/'
 
-                count += 1
+            soundfont = random.choice(soundfonts)
+            attempt_count += 1
+            print(f"[{success_count + 1}/{target}] (attempt {attempt_count}) {rel}  sf={soundfont.name[:40]}")
+
+            ok = generate_song(str(midifile), outpath, [soundfont], threads)
+            if ok:
+                success_count += 1
 
     # wait for all threads to finish
     for thread in threads:
@@ -515,11 +444,10 @@ def find_soundfonts():
         print('Loading soundfonts from ' + args.soundfont_path)
         for root, _dirs, files in os.walk(args.soundfont_path):
             for file in files:
-                if file[-4:] == '.sf2': # timidity does not seem to handle sf3 files very well
-                    name = file[0:-4]
-                    print(name)
+                if file.endswith('.sf2'):  # timidity does not handle sf3 well
                     path = os.path.join(root, file)
-                    soundfonts.append(Soundfont(name, path))
+                    soundfonts.append(Soundfont(file[:-4], path))
+        print(f'Loaded {len(soundfonts)} soundfonts from {args.soundfont_path}')
     return soundfonts
 
 

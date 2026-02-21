@@ -6,7 +6,8 @@ import config
 
 import argparse
 
-import torchaudio
+import soundfile
+import numpy as np
 
 parser = argparse.ArgumentParser()
 
@@ -32,11 +33,13 @@ if args.outfile_prefix is None:
 
 phasefile = args.outfile_prefix + '.phase_prediction'
 
-audio, samplerate = torchaudio.load(args.input)
+audio, samplerate = soundfile.read(args.input, dtype='float32')
 
 assert samplerate == config.samplerate, "sample rate mismatch"
 
-audio = audio.mean(0)
+if audio.ndim == 2:
+    audio = audio.mean(axis=1)
+audio = torch.from_numpy(audio)
 
 print('input audio shape:', audio.shape)
 

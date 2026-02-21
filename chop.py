@@ -19,8 +19,6 @@ import soundfile
 
 from config import chunk_duration, frame_size, samplerate
 
-from audio_event import AudioEvent
-
 parser = argparse.ArgumentParser(description='Chop up the songs into chunks.')
 
 parser.add_argument('--in-path', type=str, default='data/rendered_midi/lakh_clean', help='path to the rendered audio. The directory structure is expected to be: <in-path>/<artist>/ and contain a folder <song> with n .ogg files along with one events.csv file')
@@ -73,9 +71,9 @@ def call_ffmpeg(command, outfile):
         sys.exit(0)
     except Exception as error:
         print('ffmpeg failed. Rolling back.', error)
-        os.remove(outfile + '.events')
-        os.remove(outfile + '.phase')
-        os.remove(outfile + '.ogg')
+        for ext in ('.phase', '.ogg'):
+            if os.path.exists(outfile + ext):
+                os.remove(outfile + ext)
 
 def read_bar_starts(file_path):
     bars = []
@@ -105,22 +103,21 @@ def calc_phase_at_time(time_in_seconds, bars):
         phase = phase % 1.0
     return phase
 
-for artist in os.listdir(args.in_path):
-    print('Artist: ', artist)
-    for song in os.listdir(args.in_path + '/' + artist):
-        songpath = args.in_path + '/' + artist + '/' + song + '/'
-        print('Processing ', songpath)
-        audio_files = []
-        for file in os.listdir(songpath):
-            if file[-4:] == '.ogg':
-                audio_files.append(file)
+from pathlib import Path
+
+song_dirs = [
+    str(p.parent) + '/'
+    for p in Path(args.in_path).rglob('bars.csv')
+    if any(p.parent.glob('*.ogg'))
+]
+
+for songpath in song_dirs:
+    print('Processing ', songpath)
+    audio_files = [f.name for f in Path(songpath).glob('*.ogg')]
+    if True:
 
         print('Found ', str(audio_files))
 
-        events = []
-        with open(songpath + 'events.csv', 'r', encoding='utf8') as f:
-            for line in f:
-                events.append(AudioEvent.from_csv_line(line))
         bars_path = songpath + 'bars.csv'
         if not os.path.exists(bars_path):
             print('Skipping song, missing bars.csv:', songpath)
@@ -170,11 +167,10 @@ for artist in os.listdir(args.in_path):
                 offset = start + int(chunk_length * chunk_pitches[i])
 
             infile = songpath + audio_file
-            outfileprefix = args.out_path + '/' + '-'.join([abbreviate(artist), abbreviate(song), abbreviate(audio_file[:-4])]) + '-'
+            rel = os.path.relpath(songpath, args.in_path).replace(os.sep, '_')
+            outfileprefix = args.out_path + '/' + abbreviate(rel) + '-' + abbreviate(audio_file[:-4]) + '-'
             digits = math.floor(math.log10(number_of_chunks)) + 1
 
-            event_pointer = 0
-            last_event_time = -1
             for i, start in enumerate(chunk_starts):
 
                 outfile = outfileprefix + str(i).zfill(digits)
@@ -182,21 +178,6 @@ for artist in os.listdir(args.in_path):
                 pitch = chunk_pitches[i]
 
                 start_time = start / sample_rate
-                end_time = start_time + chunk_duration * pitch
-
-                # write relevant kicks and snares to file
-                with open(outfile + '.events', 'w', encoding='utf8') as f:
-                    # start_ and end_time refer to the original pitch in seconds
-                    while event_pointer < len(events) and events[event_pointer].time < start_time:
-                        event_pointer += 1
-                    while event_pointer < len(events) and events[event_pointer].time <= end_time:
-                        event = events[event_pointer]
-                        time = (event.time - start_time) / pitch
-                        if event.volume < 0:
-                            print('Volume < 0. Skipping event.')
-                        else:
-                            f.write(f"{time:.4f},{event.note},{event.volume:.4f}\n")
-                        event_pointer += 1
 
                 frame_count = int(chunk_duration * args.sample_rate / frame_size)
                 phases = []
