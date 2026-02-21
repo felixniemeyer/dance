@@ -19,6 +19,9 @@ import os
 
 import numpy as np
 import soundfile
+from config import frame_size, samplerate
+
+FRAME_DURATION = frame_size / samplerate  # seconds per label frame (0.02s at 16kHz/320)
 import dash
 from dash import dcc, html
 from dash.dependencies import Input, Output
@@ -67,8 +70,7 @@ def load_chunk(chunk_name):
 
     duration    = len(audio) / sr
     audio_times = np.linspace(0, duration, len(audio))
-    frame_dur   = duration / len(phase)
-    phase_times = np.arange(len(phase)) * frame_dur + frame_dur / 2  # frame centres
+    phase_times = np.arange(len(phase)) * FRAME_DURATION + FRAME_DURATION / 2  # frame centres
 
     # downsample waveform
     if len(audio) > MAX_WAVEFORM_POINTS:

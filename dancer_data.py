@@ -70,10 +70,10 @@ class DanceDataset(Dataset):
             audio = audio[:expected_samples]
 
         phase_labels = load_phase_labels(phase_file_path)
+        # Keep however many label frames the file contains (may be longer than
+        # expected_frames to provide anticipation headroom). Only pad if short.
         if phase_labels.shape[0] < expected_frames:
             phase_labels = torch.nn.functional.pad(phase_labels, (0, expected_frames - phase_labels.shape[0]))
-        else:
-            phase_labels = phase_labels[:expected_frames]
 
         frames = audio.reshape(expected_frames, self.frame_size)
 

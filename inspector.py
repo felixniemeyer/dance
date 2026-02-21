@@ -44,12 +44,19 @@ args = parser.parse_args()
 AUDIO_EXTS = {'.ogg', '.mp3', '.wav', '.flac', '.m4a', '.aac'}
 
 def find_chunks(path):
+    if not os.path.isdir(path):
+        print(f'[inspector] chunks path not found: {path!r}')
+        return []
+    all_files = sorted(os.listdir(path))
+    ogg_files = [f for f in all_files if f.endswith('.ogg')]
     names = []
-    for f in sorted(os.listdir(path)):
-        if f.endswith('.ogg'):
-            stem = f[:-4]
-            if os.path.exists(os.path.join(path, stem + '.phase')):
-                names.append(stem)
+    for f in ogg_files:
+        stem = f[:-4]
+        if os.path.exists(os.path.join(path, stem + '.phase')):
+            names.append(stem)
+    if not names:
+        print(f'[inspector] no .ogg+.phase pairs in {path!r} '
+              f'({len(ogg_files)} .ogg, {len(all_files)} total files)')
     return names
 
 def find_test_files(path):
@@ -215,7 +222,26 @@ def _base_fig(title, audio_times, audio):
     fig.update_xaxes(title_text='time (s)', row=2, col=1)
     return fig
 
-def build_chunk_figure(chunk_name, pred_times=None, pred_phases=None):
+def _pred_color(ant_ms):
+    return '#40e0d0' if ant_ms > 0 else '#7fff7f'  # cyan if anticipation, green if 0ms
+
+def _add_pred_trace(fig, times, phases, color, name):
+    fig.add_trace(
+        go.Scatter(x=times, y=phases, mode='lines', name=name,
+                   line=dict(color=color, width=1.2)),
+        row=2, col=1,
+    )
+    r, g, b = int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16)
+    bar_rgba = f'rgba({r},{g},{b},0.35)'
+    for t in _bar_times_from_phase(times, phases):
+        fig.add_shape(dict(
+            type='line', xref='x', yref='paper',
+            x0=t, x1=t, y0=0, y1=1,
+            line=dict(color=bar_rgba, width=1),
+        ))
+
+def build_chunk_figure(chunk_name, pred_times=None, pred_phases=None,
+                       ant_ms=0, ref_times=None, ref_phases=None):
     audio_times, audio, phase_times, phase, bar_times, duration = load_chunk(chunk_name)
     fig = _base_fig(chunk_name, audio_times, audio)
 
@@ -226,19 +252,11 @@ def build_chunk_figure(chunk_name, pred_times=None, pred_phases=None):
     )
 
     if pred_times is not None and pred_phases is not None:
-        fig.add_trace(
-            go.Scatter(x=pred_times, y=pred_phases, mode='lines', name='prediction',
-                       line=dict(color='#7fff7f', width=1.2, dash='dot')),
-            row=2, col=1,
-        )
+        label = f'prediction ({ant_ms:.0f} ms)' if ant_ms > 0 else 'prediction'
+        _add_pred_trace(fig, pred_times, pred_phases, _pred_color(ant_ms), label)
 
-        pred_bar_times = _bar_times_from_phase(pred_times, pred_phases)
-        for t in pred_bar_times:
-            fig.add_shape(dict(
-                type='line', xref='x', yref='paper',
-                x0=t, x1=t, y0=0, y1=1,
-                line=dict(color='rgba(100,200,100,0.35)', width=1, dash='dot'),
-            ))
+    if ref_times is not None and ref_phases is not None:
+        _add_pred_trace(fig, ref_times, ref_phases, '#7fff7f', 'prediction (0 ms ref)')
 
     for t in bar_times:
         fig.add_shape(dict(
@@ -249,22 +267,16 @@ def build_chunk_figure(chunk_name, pred_times=None, pred_phases=None):
 
     return fig
 
-def build_test_figure(filename, pred_times=None, pred_phases=None):
+def build_test_figure(filename, pred_times=None, pred_phases=None,
+                      ant_ms=0, ref_times=None, ref_phases=None):
     audio_times, audio, duration = load_test_file(filename)
     fig = _base_fig(filename, audio_times, audio)
 
     if pred_times is not None and pred_phases is not None:
-        fig.add_trace(
-            go.Scatter(x=pred_times, y=pred_phases, mode='lines', name='prediction',
-                       line=dict(color='#7fff7f', width=1.2, dash='dot')),
-            row=2, col=1,
-        )
-        for t in _bar_times_from_phase(pred_times, pred_phases):
-            fig.add_shape(dict(
-                type='line', xref='x', yref='paper',
-                x0=t, x1=t, y0=0, y1=1,
-                line=dict(color='rgba(100,200,100,0.35)', width=1, dash='dot'),
-            ))
+        label = f'prediction ({ant_ms:.0f} ms)' if ant_ms > 0 else 'prediction'
+        _add_pred_trace(fig, pred_times, pred_phases, _pred_color(ant_ms), label)
+        if ref_times is not None and ref_phases is not None:
+            _add_pred_trace(fig, ref_times, ref_phases, '#7fff7f', 'prediction (0 ms ref)')
     else:
         fig.add_annotation(
             text='Run inference to see phase prediction',
@@ -311,8 +323,7 @@ app.layout = html.Div([
         dcc.RadioItems(
             id='source-radio',
             options=[
-                {'label': f' Chunks ({len(chunk_names)})', 'value': 'chunk',
-                 'disabled': len(chunk_names) == 0},
+                {'label': f' Chunks ({len(chunk_names)})', 'value': 'chunk'},
                 {'label': f' Real-world ({len(test_files)})', 'value': 'test',
                  'disabled': len(test_files) == 0},
             ],
@@ -351,10 +362,10 @@ app.layout = html.Div([
             placeholder='(none)',
             style={'width': '300px', 'color': '#111'},
         ),
-        html.Span('Anticipation (s):', style=LBL),
+        html.Span('Anticipation (ms):', style=LBL),
         dcc.Input(
             id='ant-input',
-            type='number', value=0.0, min=0.0, max=2.0, step=0.05,
+            type='number', value=0, min=0, max=500, step=10,
             style={'width': '70px', 'padding': '4px', 'background': '#1a1a2e',
                    'color': '#eee', 'border': '1px solid #444', 'borderRadius': '4px'},
         ),
@@ -427,15 +438,21 @@ def run_inference_cb(n_clicks, source, chunk_name, test_file, ckpt_rel, anticipa
     if not ckpt_rel:
         return None, 'Select a checkpoint first.'
     try:
-        ant = float(anticipation or 0.0)
+        ant_ms = float(anticipation or 0.0)
+        ant_s  = ant_ms / 1000.0
         if source == 'chunk' and chunk_name:
             audio_path = os.path.join(args.chunks_path, chunk_name + '.ogg')
         elif source == 'test' and test_file:
             audio_path = os.path.join(args.test_data_path, test_file)
         else:
             return None, 'No file selected.'
-        times, phases = run_inference(ckpt_rel, audio_path, ant)
-        return {'times': times.tolist(), 'phases': phases.tolist()}, f'Done — {ckpt_rel}'
+        times, phases = run_inference(ckpt_rel, audio_path, ant_s)
+        result = {'times': times.tolist(), 'phases': phases.tolist(), 'ant_ms': ant_ms}
+        if ant_ms > 1:
+            ref_times, ref_phases = run_inference(ckpt_rel, audio_path, 0.0)
+            result['ref_times']  = ref_times.tolist()
+            result['ref_phases'] = ref_phases.tolist()
+        return result, f'Done — {ckpt_rel}'
     except Exception as e:
         return None, f'Error: {e}'
 
@@ -460,13 +477,16 @@ def clear_pred_on_change(_a, _b, _c):
     Input('pred-store', 'data'),
 )
 def update_graph(source, chunk_name, test_file, pred):
-    pt = np.array(pred['times'])   if pred else None
-    pp = np.array(pred['phases'])  if pred else None
+    pt     = np.array(pred['times'])              if pred else None
+    pp     = np.array(pred['phases'])             if pred else None
+    ant_ms = pred.get('ant_ms', 0)                if pred else 0
+    rt     = np.array(pred['ref_times'])          if pred and 'ref_times'  in pred else None
+    rp     = np.array(pred['ref_phases'])         if pred and 'ref_phases' in pred else None
 
     if source == 'chunk' and chunk_name:
-        return build_chunk_figure(chunk_name, pt, pp)
+        return build_chunk_figure(chunk_name, pt, pp, ant_ms, rt, rp)
     if source == 'test' and test_file:
-        return build_test_figure(test_file, pt, pp)
+        return build_test_figure(test_file, pt, pp, ant_ms, rt, rp)
     return go.Figure()
 
 
