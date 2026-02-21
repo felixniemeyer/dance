@@ -34,15 +34,17 @@ import soundfile
 from config import chunk_duration, frame_size, samplerate
 
 # Extra seconds of phase labels written beyond the audio chunk duration.
-# Ensures the anticipation offset can always find a valid target label,
-# even for frames near the end of a chunk.
-phase_label_extra_seconds = 1
+# This enables anticipation targets up to +1.0s without clamping to the
+# final in-chunk label frame.
+phase_label_extra_seconds = 1.0
 
 # ── CLI args ──────────────────────────────────────────────────────────────────
 
 parser = argparse.ArgumentParser(description='Render MIDI + chop into training chunks in one pass.')
 parser.add_argument('--midi-path', type=str, default='data/midi/lakh_clean')
 parser.add_argument('--soundfont-path', type=str, default='data/soundfonts')
+parser.add_argument('--single-soundfont', type=str, default=None,
+    help='path to one .sf2 file to use instead of scanning --soundfont-path')
 parser.add_argument('--out-path', type=str, required=True)
 parser.add_argument('--target-count', type=int, default=None,
     help='stop after this many successfully processed songs')
@@ -57,6 +59,8 @@ parser.add_argument('--volume', type=float, default=2.0,
 parser.add_argument('--midi-jitter-max-seconds', type=float, default=0.05,
     help='max absolute jitter applied to drum note_on events in seconds. 0 disables jitter.')
 parser.add_argument('--overwrite', default=False, action='store_true')
+parser.add_argument('--render-timeout-seconds', type=float, default=None,
+    help='hard timeout for one MIDI render call. If not set, timeout scales with song length.')
 args = parser.parse_args()
 
 os.makedirs(args.out_path, exist_ok=True)
@@ -212,21 +216,43 @@ def jitter_drum_notes(mid, max_seconds):
 # ── render ────────────────────────────────────────────────────────────────────
 
 def render_wav(midifile, wavfile, soundfont, timeout_s):
-    cmd = [
+    fluidsynth_cmd = [
         'fluidsynth', '--no-shell',
         '--fast-render', wavfile,
         '--sample-rate', str(samplerate),
         soundfont.path, midifile,
     ]
-    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
+    with subprocess.Popen(fluidsynth_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
         try:
             p.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired:
             p.kill()
             p.communicate()
-            print('  Render timed out')
+            print('  FluidSynth render timed out; trying TiMidity fallback')
+        else:
+            if p.returncode == 0 and os.path.exists(wavfile):
+                return True
+            print(f'  FluidSynth failed with code {p.returncode}; trying TiMidity fallback')
+
+    timidity_cmd = [
+        'timidity',
+        midifile,
+        '-Ow',
+        '-o', wavfile,
+        '-s', str(samplerate),
+        '-x', f"soundfont '{soundfont.path}'",
+        '--preserve-silence',
+    ]
+    with subprocess.Popen(timidity_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
+        try:
+            p.communicate(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+            print('  TiMidity render timed out')
             return False
-    return p.returncode == 0
+
+    return p.returncode == 0 and os.path.exists(wavfile)
 
 # ── chunk writer (runs in thread) ─────────────────────────────────────────────
 
@@ -276,7 +302,8 @@ def process(midifile_str, soundfont, bar_starts, midi_rel, duration):
             os.close(fd2)
             mid.save(jitter_tmpfile)
             render_midi_path = jitter_tmpfile
-        ok = render_wav(render_midi_path, wavfile, soundfont, max(120, duration * 10))
+        timeout_s = args.render_timeout_seconds if args.render_timeout_seconds is not None else max(120, duration * 10)
+        ok = render_wav(render_midi_path, wavfile, soundfont, timeout_s)
         if not ok or not os.path.exists(wavfile):
             return 0
 
@@ -284,15 +311,19 @@ def process(midifile_str, soundfont, bar_starts, midi_rel, duration):
         sample_rate = info.samplerate
         song_length = info.frames  # total samples
 
-        chunk_len = int((chunk_duration + phase_label_extra_seconds) * sample_rate)
-        n_chunks = max(2, int(song_length / (chunk_len * (2 - args.min_pitch)) * 0.9))
+        # Keep chunk placement math equivalent to chop.py: placement depends on
+        # audio chunk duration only. Extra label horizon must not change scale.
+        chunk_len_audio = int(chunk_duration * sample_rate)
+        n_chunks = int(song_length / (chunk_len_audio * (2 - args.min_pitch)) * 0.9 - 1)
+        if n_chunks < 1:
+            return 0
 
         # random pitch factors for each chunk
         pitches = [
             args.min_pitch + random.random() * 2 * (1 - args.min_pitch)
             for _ in range(n_chunks)
         ]
-        used = sum(math.ceil(chunk_len * p) for p in pitches)
+        used = sum(math.ceil(chunk_len_audio * p) for p in pitches)
         free = song_length - used
         if free <= 0:
             return 0
@@ -304,7 +335,7 @@ def process(midifile_str, soundfont, bar_starts, midi_rel, duration):
             delta = spots[i + 1] - spots[i]
             s = delta + offset
             starts.append(s)
-            offset = s + int(chunk_len * pitches[i])
+            offset = s + int(chunk_len_audio * pitches[i])
 
         rel_flat = midi_rel.replace(os.sep, '_')
         prefix = abbreviate(rel_flat) + '-' + abbreviate(soundfont.name) + '-'
@@ -319,7 +350,9 @@ def process(midifile_str, soundfont, bar_starts, midi_rel, duration):
             frame_count = int((chunk_duration + phase_label_extra_seconds) * sample_rate / frame_size)
             phases, valid = [], True
             for fi in range(frame_count):
-                orig_t = start_time + fi * frame_size / sample_rate * pitch
+                # fi index is on chunk output timeline; map back to source time.
+                local_time = fi * frame_size / sample_rate
+                orig_t = start_time + local_time * pitch
                 phase = calc_phase_at_time(orig_t, bar_starts)
                 if phase is None:
                     valid = False
@@ -360,6 +393,16 @@ def process(midifile_str, soundfont, bar_starts, midi_rel, duration):
 # ── soundfont loader ──────────────────────────────────────────────────────────
 
 def find_soundfonts():
+    if args.single_soundfont is not None:
+        sf_path = os.path.abspath(args.single_soundfont)
+        if not os.path.exists(sf_path):
+            print('Single soundfont not found:', sf_path)
+            return []
+        if not sf_path.endswith('.sf2'):
+            print('Single soundfont must be .sf2:', sf_path)
+            return []
+        return [Soundfont(os.path.basename(sf_path)[:-4], sf_path)]
+
     soundfonts = []
     for root, _, files in os.walk(args.soundfont_path):
         for f in files:
@@ -411,8 +454,9 @@ def main():
             continue
 
         n = process(str(midifile), sf, bar_starts, midi_rel, mid.length)
-        success += 1
-        total_chunks += n
+        if n > 0:
+            success += 1
+            total_chunks += n
 
     elapsed = time.time() - t0
     print(f'\nDone: {success} songs processed, {total_chunks} chunks written in {elapsed:.1f}s')

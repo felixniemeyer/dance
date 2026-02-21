@@ -30,6 +30,7 @@ parser.add_argument('--volume', type=float, default=2, help='output level before
 parser.add_argument('--dry-run', default=False, help='dry run')
 
 parser.add_argument('--max-processes', type=int, default=9, help='max processes to use')
+parser.add_argument('--phase-label-extra-seconds', type=float, default=1.0, help='extra future phase label horizon in seconds')
 
 # parse arguments
 args = parser.parse_args()
@@ -179,7 +180,7 @@ for songpath in song_dirs:
 
                 start_time = start / sample_rate
 
-                frame_count = int(chunk_duration * args.sample_rate / frame_size)
+                frame_count = int((chunk_duration + args.phase_label_extra_seconds) * args.sample_rate / frame_size)
                 phases = []
                 chunk_is_valid = True
                 for frame_index in range(frame_count):

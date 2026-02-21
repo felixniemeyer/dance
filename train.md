@@ -83,14 +83,14 @@ python chop.py \
 Train quick sanity model:
 
 ```bash
-python train.py phase_tcn \
+python train.py phase_tcn_mel \
   --chunks-path "data/chunks/smoke_phase" \
   --checkpoints-path "checkpoints" \
   --tag "smoke-phase" \
   --num-epochs 1 \
   --batch-size 2 \
   --anticipation-min 0.0 \
-  --anticipation-max 0.5 \
+  --anticipation-max 1.0 \
   --warmup-seconds 8.0
 ```
 
@@ -133,16 +133,16 @@ python chop.py \
 Baseline:
 
 ```bash
-python train.py phase_tcn \
+python train.py phase_tcn_mel \
   --chunks-path "data/chunks/lakh_phase" \
   --checkpoints-path "checkpoints" \
-  --tag "phase-tcn-a0-500ms" \
+  --tag "phase-tcn-mel-a0-500ms" \
   --num-epochs 30 \
   --batch-size 8 \
   --learning-rate 1e-4 \
   --learning-rate-decay 0.95 \
   --anticipation-min 0.0 \
-  --anticipation-max 0.5 \
+  --anticipation-max 1.0 \
   --warmup-seconds 8.0 \
   --onnx
 ```
@@ -150,14 +150,14 @@ python train.py phase_tcn \
 Continue training:
 
 ```bash
-python train.py phase_tcn \
+python train.py phase_tcn_mel \
   --chunks-path "data/chunks/lakh_phase" \
   --checkpoints-path "checkpoints" \
-  --tag "phase-tcn-a0-500ms" \
+  --tag "phase-tcn-mel-a0-500ms" \
   --continue-from 30 \
   --num-epochs 20 \
   --anticipation-min 0.0 \
-  --anticipation-max 0.5 \
+  --anticipation-max 1.0 \
   --warmup-seconds 8.0
 ```
 
@@ -167,7 +167,7 @@ Visual inspection:
 
 ```bash
 python try_model.py checkpoints \
-  phase-tcn-a0-500ms/30.pt \
+  phase-tcn-mel-a0-500ms/30.pt \
   --dataset-path "data/chunks/lakh_phase" \
   --anticipation 0.25 \
   --device-type cuda
@@ -177,7 +177,7 @@ Batch inference on one file:
 
 ```bash
 python apply.py \
-  checkpoints/phase-tcn-a0-500ms/30.pt \
+  checkpoints/phase-tcn-mel-a0-500ms/30.pt \
   <audio.ogg> \
   --anticipation 0.25 \
   --device-type cuda

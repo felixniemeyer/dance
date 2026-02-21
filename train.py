@@ -42,7 +42,7 @@ parser.add_argument("-r", "--learning-rate", type=float, default=1e-4, help="lea
 parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.95, help="learning rate decay")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 parser.add_argument("--anticipation-min", type=float, default=0.0, help="minimum anticipation in seconds")
-parser.add_argument("--anticipation-max", type=float, default=0.5, help="maximum anticipation in seconds")
+parser.add_argument("--anticipation-max", type=float, default=1.0, help="maximum anticipation in seconds")
 parser.add_argument("--warmup-seconds", type=float, default=8.0, help="ignore loss in first N seconds of each sequence")
 
 # misc
@@ -180,15 +180,18 @@ def sample_anticipation(batch_size_local, device_local):
     return args.anticipation_min + random_values * (args.anticipation_max - args.anticipation_min)
 
 
-def create_future_phase_labels(phase_labels, anticipation):
-    # phase_labels shape: [batch, frames] with values in [0,1)
-    sequence_length = phase_labels.shape[1]
-    frame_indices = torch.arange(sequence_length, device=phase_labels.device, dtype=phase_labels.dtype).unsqueeze(0)
+def create_future_phase_labels(phase_labels, anticipation, input_frames):
+    # phase_labels shape: [batch, label_frames] with values in [0,1)
+    # predictions are produced for input_frames; labels may include extra look-ahead.
+    if input_frames > phase_labels.shape[1]:
+        input_frames = phase_labels.shape[1]
+
+    frame_indices = torch.arange(input_frames, device=phase_labels.device, dtype=phase_labels.dtype).unsqueeze(0)
     offset_in_frames = (anticipation / frame_duration).unsqueeze(1)
     lookup_index = frame_indices + offset_in_frames
 
-    low = torch.floor(lookup_index).long().clamp(max=sequence_length - 1)
-    high = (low + 1).clamp(max=sequence_length - 1)
+    low = torch.floor(lookup_index).long().clamp(max=phase_labels.shape[1] - 1)
+    high = (low + 1).clamp(max=phase_labels.shape[1] - 1)
     w = lookup_index - low.float()
 
     low_values = phase_labels.gather(1, low)
@@ -242,7 +245,7 @@ for epoch in range(first_epoch, last_epoch):
         batch_inputs = batch_inputs.to(device)
         phase_labels = phase_labels.to(device)
         anticipation = sample_anticipation(batch_inputs.shape[0], device)
-        target_labels = create_future_phase_labels(phase_labels, anticipation)
+        target_labels = create_future_phase_labels(phase_labels, anticipation, batch_inputs.shape[1])
         to_device_time = time.time() - start_calc
 
         # Forward pass
@@ -291,7 +294,7 @@ for epoch in range(first_epoch, last_epoch):
                 val_inputs = val_inputs.to(device)
                 val_phase_labels = val_phase_labels.to(device)
                 anticipation = sample_anticipation(val_inputs.shape[0], device)
-                val_target_labels = create_future_phase_labels(val_phase_labels, anticipation)
+                val_target_labels = create_future_phase_labels(val_phase_labels, anticipation, val_inputs.shape[1])
 
                 val_outputs, _ = model_forward(model, val_inputs, anticipation)
                 if val_outputs.shape[-1] != 2:
