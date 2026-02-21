@@ -51,7 +51,7 @@ VALID_TS_DENOMINATORS = {1, 2, 4, 8, 16, 32}
 
 # Fraction/grid alignment thresholds (phase-domain).
 MAX_FRACTION_DENOMINATOR = 13
-FRACTION_PHASE_TOLERANCE = 0.015
+FRACTION_PHASE_TOLERANCE = 0.003
 MIN_REGION_SCORE = 0.10
 REGION_SECONDS = 16.0
 MIN_NOTES_FOR_ALIGNMENT_CHECK = 24
@@ -153,12 +153,18 @@ def _phase_match_weight(phase):
     return best
 
 
+def _max_possible_weight():
+    # d=1 yields the maximum weight for formula (13 + d) / d.
+    return (13.0 + 1.0) / 1.0
+
+
 def _has_good_note_phase_alignment(note_ticks, note_times, time_sigs, ticks_per_beat):
     """
     Returns (ok: bool, min_region_score: float, region_count: int, considered_notes: int).
     Each note contributes the weight 1/d if it lands near fraction k/d (best d chosen),
     with d in [1..MAX_FRACTION_DENOMINATOR], else 0.
-    Regional score = sum(weights) / notes_in_region.
+    Regional score = normalized sum(weights) / notes_in_region, where each
+    note weight is divided by max possible weight so score is in [0, 1].
     All sufficiently-populated regions must satisfy score >= MIN_REGION_SCORE.
     """
     if len(note_ticks) < MIN_NOTES_FOR_ALIGNMENT_CHECK:
@@ -185,9 +191,11 @@ def _has_good_note_phase_alignment(note_ticks, note_times, time_sigs, ticks_per_
         region_score_sum[rid] = region_score_sum.get(rid, 0.0) + weight
 
     considered_regions = []
+    max_w = _max_possible_weight()
     for rid, total in region_total.items():
         if total >= MIN_NOTES_PER_REGION:
-            considered_regions.append((rid, region_score_sum[rid] / total, total))
+            score = (region_score_sum[rid] / max_w) / total
+            considered_regions.append((rid, score, total))
 
     if not considered_regions:
         return False, 0.0, 0, len(note_ticks)
