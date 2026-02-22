@@ -126,6 +126,16 @@ class _TCNBlock(nn.Module):
 
 
 class PhaseTCNMel(nn.Module):
+    hparams = {
+        'n_mels':   N_MELS,
+        'n_fft':    N_FFT,
+        'f_min':    F_MIN,
+        'f_max':    F_MAX,
+        'hidden':   HIDDEN,
+        'kernel':   KERNEL,
+        'n_blocks': N_BLOCKS,
+    }
+
     def __init__(self):
         super().__init__()
         self.frontend    = _MelFrontend()

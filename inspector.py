@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import os
+import random
 import subprocess
 import tempfile
 
@@ -342,7 +343,12 @@ app.layout = html.Div([
                 clearable=False,
                 style={'width': '360px', 'color': '#111'},
             ),
-        ], id='chunk-picker-wrap'),
+            html.Button('Random', id='random-chunk-btn', n_clicks=0, style={
+                'background': '#2a4a7f', 'color': '#fff', 'border': 'none',
+                'borderRadius': '4px', 'padding': '6px 10px', 'cursor': 'pointer',
+                'fontSize': '13px',
+            }),
+        ], id='chunk-picker-wrap', style={'display': 'flex', 'alignItems': 'center', 'gap': '8px'}),
         # test file picker
         html.Div([
             dcc.Dropdown(
@@ -352,6 +358,11 @@ app.layout = html.Div([
                 clearable=False,
                 style={'width': '360px', 'color': '#111'},
             ),
+            html.Button('Random', id='random-test-btn', n_clicks=0, style={
+                'background': '#2a4a7f', 'color': '#fff', 'border': 'none',
+                'borderRadius': '4px', 'padding': '6px 10px', 'cursor': 'pointer',
+                'fontSize': '13px',
+            }),
         ], id='test-picker-wrap', style={'display': 'none'}),
         SEP,
         html.Span('Checkpoint:', style=LBL),
@@ -405,7 +416,7 @@ app.layout = html.Div([
     Input('source-radio', 'value'),
 )
 def toggle_pickers(source):
-    show = {'display': 'block'}
+    show = {'display': 'flex', 'alignItems': 'center', 'gap': '8px'}
     hide = {'display': 'none'}
     return (show, hide) if source == 'chunk' else (hide, show)
 
@@ -489,6 +500,24 @@ def update_graph(source, chunk_name, test_file, pred):
     if source == 'test' and test_file:
         return build_test_figure(test_file, pt, pp, ant_ms, rt, rp)
     return go.Figure()
+
+
+@app.callback(
+    Output('chunk-dd', 'value'),
+    Input('random-chunk-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def random_chunk(_):
+    return random.choice(chunk_names)
+
+
+@app.callback(
+    Output('test-dd', 'value'),
+    Input('random-test-btn', 'n_clicks'),
+    prevent_initial_call=True,
+)
+def random_test(_):
+    return random.choice(test_files)
 
 
 if __name__ == '__main__':

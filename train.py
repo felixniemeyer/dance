@@ -11,6 +11,7 @@ import re
 
 import subprocess
 
+import mlflow
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, random_split
@@ -112,8 +113,9 @@ val_size = data_size - train_size
 
 train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True) if val_size > 0 else None
+num_workers = max(1, os.cpu_count() - 1)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=True, pin_memory=True, multiprocessing_context='fork')
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=True, pin_memory=True, multiprocessing_context='fork') if val_size > 0 else None
 
 # Load model from disk if it exists
 first_epoch = 0
@@ -133,9 +135,12 @@ if args.continue_from_file is not None:
 
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
         optimizer.load_state_dict(obj['optimizer_state_dict'])
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = args.learning_rate
 
         first_epoch = obj['epoch']
         print('loaded checkpoint from', args.continue_from)
+        print(f'learning rate set to {args.learning_rate}')
     except FileNotFoundError:
         print('no checkpoint found at', args.continue_from)
         sys.exit()
@@ -214,6 +219,23 @@ def model_forward(model_local, batch_inputs, anticipation):
         return model_local(batch_inputs)
 
 
+mlflow.set_experiment(args.tag)
+mlflow_run = mlflow.start_run()
+mlflow.log_params({
+    'model':              args.model,
+    'learning_rate':      args.learning_rate,
+    'lr_decay':           args.learning_rate_decay,
+    'batch_size':         args.batch_size,
+    'anticipation_min':   args.anticipation_min,
+    'anticipation_max':   args.anticipation_max,
+    'warmup_seconds':     args.warmup_seconds,
+    'continued_from':     args.continue_from,
+    'chunks_path':        args.chunks_path,
+    'dataset_size':       len(dataset),
+})
+if hasattr(model_class, 'hparams'):
+    mlflow.log_params(model_class.hparams)
+
 avg_loss_sum = 0
 toal_time = 0
 
@@ -272,8 +294,9 @@ for epoch in range(first_epoch, last_epoch):
         train_total_loss += loss.item()
         train_num_batches += 1
 
+    train_loss = train_total_loss / train_num_batches
     print()
-    print(f"Training loss:   {train_total_loss / train_num_batches:.4f}")
+    print(f"Training loss:   {train_loss:.4f}")
 
     scheduler.step()
 
@@ -305,9 +328,10 @@ for epoch in range(first_epoch, last_epoch):
                 total_loss += loss
                 total_batches += 1
 
-            avg_loss_sum += total_loss / total_batches
+            val_loss = total_loss / total_batches
+            avg_loss_sum += val_loss
             print()
-            print(f"Validation loss: {loss:.4f}")
+            print(f"Validation loss: {val_loss:.4f}")
     else:
         print('Validation skipped (dataset too small for split)')
 
@@ -338,7 +362,7 @@ for epoch in range(first_epoch, last_epoch):
 
     # append loss to log file
     with open(f"{save_path}loss.csv", 'a', encoding='utf8') as f:
-        f.write(f"{epoch_1},{loss}\n")
+        f.write(f"{epoch_1},{train_loss},{val_loss}\n")
 
 print(f"\nTotal training time: {toal_time:.2f} seconds")
 print(f"Total forward pass time: {forward_time:.2f} seconds ({forward_time / toal_time * 100:.2f}%)")
@@ -349,7 +373,7 @@ print(f"Total to device time: {to_device_time:.2f} seconds ({to_device_time / to
 epoch_count = last_epoch - first_epoch
 print(f"\nAverage time per epoch: {toal_time / epoch_count:.2f} seconds")
 print(f"\nAverage validation loss: {avg_loss_sum / epoch_count:.4f}")
-print(f"Final validation loss: {loss:.4f}")
+print(f"Final validation loss: {val_loss:.4f}")
 
 if args.plot_loss:
     subprocess.run(['python', 'plot_loss.py', f"{save_path}loss.csv"])
