@@ -34,7 +34,7 @@ parser.add_argument("--continue-from-file", type=str, default=None, help="File t
 
 # out
 parser.add_argument("--checkpoints-path", type=str, default='checkpoints', help="path to checkpoints folder. Structure: <checkpoints_path>/<tag>/<epoch>.pt")
-parser.add_argument("-ci", "--checkpoint-interval", type=int, default=1, help="save checkpoint every n epochs")
+parser.add_argument("-ci", "--checkpoint-interval", type=int, default=5, help="save checkpoint every n epochs")
 parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Current github tag will be used as default.")
 
 # hyperparameters
@@ -364,6 +364,8 @@ for epoch in range(first_epoch, last_epoch):
     with open(f"{save_path}loss.csv", 'a', encoding='utf8') as f:
         f.write(f"{epoch_1},{train_loss},{val_loss}\n")
 
+    mlflow.log_metrics({'train_loss': float(train_loss), 'val_loss': float(val_loss)}, step=epoch_1)
+
 print(f"\nTotal training time: {toal_time:.2f} seconds")
 print(f"Total forward pass time: {forward_time:.2f} seconds ({forward_time / toal_time * 100:.2f}%)")
 print(f"Total loss calculation time: {loss_calc_time:.2f} seconds ({loss_calc_time / toal_time * 100:.2f}%)")
@@ -374,6 +376,8 @@ epoch_count = last_epoch - first_epoch
 print(f"\nAverage time per epoch: {toal_time / epoch_count:.2f} seconds")
 print(f"\nAverage validation loss: {avg_loss_sum / epoch_count:.4f}")
 print(f"Final validation loss: {val_loss:.4f}")
+
+mlflow.end_run()
 
 if args.plot_loss:
     subprocess.run(['python', 'plot_loss.py', f"{save_path}loss.csv"])

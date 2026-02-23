@@ -8,3 +8,4 @@ torchaudio
 tqdm
 dash
 plotly
+mlflow
