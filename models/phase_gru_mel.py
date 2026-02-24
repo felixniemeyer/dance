@@ -22,7 +22,7 @@ import torch.nn as nn
 from config import frame_size
 from .mel_frontend import MelFrontend
 
-# ── Hyperparameters ────────────────────────────────────────────────────────────
+# ── Default hyperparameters ────────────────────────────────────────────────────
 FFT_FRAMES = 4      # FFT window = FFT_FRAMES * frame_size samples
 N_MELS     = 64
 F_MIN      = 27.5   # Hz
@@ -34,33 +34,38 @@ DROPOUT    = 0.2    # applied between GRU layers (not after last)
 
 
 class PhaseGRUMel(nn.Module):
-    hparams = {
-        'fft_frames': FFT_FRAMES,
-        'n_mels':     N_MELS,
-        'f_min':      F_MIN,
-        'f_max':      F_MAX,
-        'hidden':     HIDDEN,
-        'n_layers':   N_LAYERS,
-        'dropout':    DROPOUT,
-    }
 
-    def __init__(self):
+    def __init__(
+        self,
+        fft_frames = FFT_FRAMES,
+        n_mels     = N_MELS,
+        f_min      = F_MIN,
+        f_max      = F_MAX,
+        hidden     = HIDDEN,
+        n_layers   = N_LAYERS,
+        dropout    = DROPOUT,
+    ):
         super().__init__()
-        self.frontend    = MelFrontend(FFT_FRAMES, N_MELS, F_MIN, F_MAX)
-        self.input_proj  = nn.Linear(N_MELS, HIDDEN)
-        self.gru         = nn.GRU(
-            input_size=HIDDEN,
-            hidden_size=HIDDEN,
-            num_layers=N_LAYERS,
-            batch_first=True,
-            dropout=DROPOUT if N_LAYERS > 1 else 0.0,
+        self.hparams = dict(
+            fft_frames=fft_frames, n_mels=n_mels,
+            f_min=f_min, f_max=f_max,
+            hidden=hidden, n_layers=n_layers, dropout=dropout,
         )
-        self.output_head = nn.Linear(HIDDEN, 3)  # sin, cos, phase_rate
+        self.frontend    = MelFrontend(fft_frames, n_mels, f_min, f_max)
+        self.input_proj  = nn.Linear(n_mels, hidden)
+        self.gru         = nn.GRU(
+            input_size=hidden,
+            hidden_size=hidden,
+            num_layers=n_layers,
+            batch_first=True,
+            dropout=dropout if n_layers > 1 else 0.0,
+        )
+        self.output_head = nn.Linear(hidden, 3)  # sin, cos, phase_rate
 
     def forward(self, x, state=None, **kwargs):
-        mel = self.frontend(x)              # [batch, seq_len, n_mels]
-        x   = self.input_proj(mel)          # [batch, seq_len, hidden]
-        out, new_state = self.gru(x, state) # [batch, seq_len, hidden]
+        mel = self.frontend(x)                         # [batch, seq_len, n_mels]
+        x   = self.input_proj(mel)                     # [batch, seq_len, hidden]
+        out, new_state = self.gru(x, state)            # [batch, seq_len, hidden]
         return self.output_head(out), new_state
 
     def export_to_onnx(self, path, device):

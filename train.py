@@ -43,6 +43,7 @@ parser.add_argument("-r", "--learning-rate", type=float, default=1e-4, help="lea
 parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.95, help="learning rate decay")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 parser.add_argument("--warmup-seconds", type=float, default=8.0, help="ignore loss in first N seconds of each sequence")
+parser.add_argument("--fft-frames", type=int, default=None, help="mel frontend: FFT window in frames (overrides model default)")
 
 # misc
 parser.add_argument("-d", "--dataset-size", type=int, default=None, help="truncate dataset to this size. For test runs.")
@@ -84,6 +85,11 @@ os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
 batch_size = args.batch_size
 
+# Build model kwargs from CLI overrides
+model_kwargs = {}
+if args.fft_frames is not None:
+    model_kwargs['fft_frames'] = args.fft_frames
+
 # Initialize the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -113,11 +119,7 @@ val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_wo
 
 # Load model from disk if it exists
 first_epoch = 0
-model = None
-optimizer = None
-
 model_class = getModelClass(args.model)
-model = model_class().to(device)
 
 if args.continue_from is not None:
     args.continue_from_file = f"{args.checkpoints_path}/{args.tag}/{args.continue_from}.pt"
@@ -133,12 +135,17 @@ if args.continue_from_file is not None:
             param_group['lr'] = args.learning_rate
 
         first_epoch = obj['epoch']
-        print('loaded checkpoint from', args.continue_from)
+        print('loaded checkpoint from', args.continue_from_file)
         print(f'learning rate set to {args.learning_rate}')
     except FileNotFoundError:
-        print('no checkpoint found at', args.continue_from)
+        print('no checkpoint found at', args.continue_from_file)
         sys.exit()
 else:
+    try:
+        model = model_class(**model_kwargs).to(device)
+    except TypeError as e:
+        print(f'Warning: model does not accept kwargs {model_kwargs}: {e}')
+        model = model_class().to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 
 # scale down learning rate after each epoch
@@ -190,8 +197,8 @@ mlflow.log_params({
     'chunks_path':    args.chunks_path,
     'dataset_size':   len(dataset),
 })
-if hasattr(model_class, 'hparams'):
-    mlflow.log_params(model_class.hparams)
+if hasattr(model, 'hparams'):
+    mlflow.log_params(model.hparams)
 
 avg_loss_sum = 0
 toal_time = 0
