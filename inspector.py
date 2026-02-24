@@ -69,12 +69,31 @@ def find_test_files(path):
     )
 
 def find_checkpoints(path):
-    pts = sorted(Path(path).rglob('*.pt'), key=lambda p: p.stat().st_mtime, reverse=True)
-    return [str(p.relative_to(path)) for p in pts]
+    """Returns (tags, tag_epochs) where tags is ordered by recency and
+    tag_epochs is a dict mapping tag -> list of epochs (descending)."""
+    if not os.path.isdir(path):
+        return [], {}
+    tag_epochs = {}
+    tag_mtime  = {}
+    for pt in Path(path).rglob('*.pt'):
+        tag = pt.parent.name
+        try:
+            epoch = int(pt.stem)
+        except ValueError:
+            continue
+        tag_epochs.setdefault(tag, []).append(epoch)
+        tag_mtime[tag] = max(tag_mtime.get(tag, 0), pt.stat().st_mtime)
+    tags = sorted(tag_epochs, key=lambda t: tag_mtime[t], reverse=True)
+    for tag in tags:
+        tag_epochs[tag] = sorted(tag_epochs[tag], reverse=True)
+    return tags, tag_epochs
 
-chunk_names       = find_chunks(args.chunks_path)
-test_files        = find_test_files(args.test_data_path)
-checkpoint_options = find_checkpoints(args.checkpoints_path)
+chunk_names      = find_chunks(args.chunks_path)
+test_files       = find_test_files(args.test_data_path)
+ckpt_tags, ckpt_tag_epochs = find_checkpoints(args.checkpoints_path)
+
+initial_ckpt_tag   = ckpt_tags[0] if ckpt_tags else None
+initial_ckpt_epoch = ckpt_tag_epochs[initial_ckpt_tag][0] if initial_ckpt_tag else None
 
 if not chunk_names and not test_files:
     raise SystemExit('No chunks and no test files found — nothing to inspect.')
@@ -365,14 +384,22 @@ app.layout = html.Div([
             }),
         ], id='test-picker-wrap', style={'display': 'none'}),
         SEP,
-        html.Span('Checkpoint:', style=LBL),
+        html.Span('Model:', style=LBL),
         dcc.Dropdown(
-            id='ckpt-dd',
-            options=[{'label': c, 'value': c} for c in checkpoint_options],
-            value=checkpoint_options[0] if checkpoint_options else None,
+            id='ckpt-tag-dd',
+            options=[{'label': t, 'value': t} for t in ckpt_tags],
+            value=initial_ckpt_tag,
             clearable=True,
             placeholder='(none)',
-            style={'width': '300px', 'color': '#111'},
+            style={'width': '200px', 'color': '#111'},
+        ),
+        html.Span('Epoch:', style=LBL),
+        dcc.Dropdown(
+            id='ckpt-epoch-dd',
+            options=[{'label': str(e), 'value': e} for e in (ckpt_tag_epochs.get(initial_ckpt_tag) or [])],
+            value=initial_ckpt_epoch,
+            clearable=False,
+            style={'width': '100px', 'color': '#111'},
         ),
         html.Span('Anticipation (ms):', style=LBL),
         dcc.Input(
@@ -436,19 +463,33 @@ def update_audio(source, chunk_name, test_file):
 
 
 @app.callback(
+    Output('ckpt-epoch-dd', 'options'),
+    Output('ckpt-epoch-dd', 'value'),
+    Input('ckpt-tag-dd', 'value'),
+)
+def update_epoch_options(tag):
+    if not tag or tag not in ckpt_tag_epochs:
+        return [], None
+    epochs = ckpt_tag_epochs[tag]
+    return [{'label': str(e), 'value': e} for e in epochs], epochs[0]
+
+
+@app.callback(
     Output('pred-store', 'data'),
     Output('status-msg', 'children'),
     Input('run-btn', 'n_clicks'),
     State('source-radio', 'value'),
     State('chunk-dd', 'value'),
     State('test-dd', 'value'),
-    State('ckpt-dd', 'value'),
+    State('ckpt-tag-dd', 'value'),
+    State('ckpt-epoch-dd', 'value'),
     State('ant-input', 'value'),
     prevent_initial_call=True,
 )
-def run_inference_cb(n_clicks, source, chunk_name, test_file, ckpt_rel, anticipation):
-    if not ckpt_rel:
+def run_inference_cb(n_clicks, source, chunk_name, test_file, ckpt_tag, ckpt_epoch, anticipation):
+    if not ckpt_tag or ckpt_epoch is None:
         return None, 'Select a checkpoint first.'
+    ckpt_rel = f'{ckpt_tag}/{ckpt_epoch}.pt'
     try:
         ant_ms = float(anticipation or 0.0)
         ant_s  = ant_ms / 1000.0
@@ -526,6 +567,6 @@ if __name__ == '__main__':
     print(f'\nDance Inspector')
     print(f'  chunks:      {args.chunks_path}  ({len(chunk_names)} chunks)')
     print(f'  test data:   {args.test_data_path}  ({len(test_files)} files)')
-    print(f'  checkpoints: {args.checkpoints_path}  ({len(checkpoint_options)} found)')
+    print(f'  checkpoints: {args.checkpoints_path}  ({len(ckpt_tags)} tags)')
     print(f'  open http://{local_ip}:{args.port}\n')
     app.run(debug=False, host='0.0.0.0', port=args.port)

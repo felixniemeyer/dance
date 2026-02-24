@@ -15,6 +15,8 @@ from .cr import CR
 from .crs import CRS
 from .phase_tcn import PhaseTCN
 from .phase_tcn_mel import PhaseTCNMel
+from .phase_lstm_mel import PhaseLSTMMel
+from .phase_gru_mel import PhaseGRUMel
 
 models = {
     'cnn_only': CNNOnly,
@@ -32,6 +34,8 @@ models = {
     'CRS': CRS,
     'phase_tcn': PhaseTCN,
     'phase_tcn_mel': PhaseTCNMel,
+    'phase_lstm_mel': PhaseLSTMMel,
+    'phase_gru_mel': PhaseGRUMel,
 }
 
 def getModels():
