@@ -34,8 +34,7 @@ import soundfile
 from config import chunk_duration, frame_size, samplerate
 
 # Extra seconds of phase labels written beyond the audio chunk duration.
-# This enables anticipation targets up to +1.0s without clamping to the
-# final in-chunk label frame.
+# Provides a small buffer of future phase values beyond the chunk end.
 phase_label_extra_seconds = 1.0
 
 # ── CLI args ──────────────────────────────────────────────────────────────────

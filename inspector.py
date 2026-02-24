@@ -176,7 +176,7 @@ def load_test_file(filename):
 
 # ── Inference ──────────────────────────────────────────────────────────────────
 
-def run_inference(checkpoint_rel, audio_path, anticipation_s):
+def run_inference(checkpoint_rel, audio_path):
     ckpt_path = os.path.join(args.checkpoints_path, checkpoint_rel)
     audio, sr = load_audio(audio_path)
 
@@ -188,19 +188,12 @@ def run_inference(checkpoint_rel, audio_path, anticipation_s):
 
     model, _ = loadModel(ckpt_path)
     model.eval()
-    ant = torch.tensor([anticipation_s], dtype=torch.float32)
 
     with torch.no_grad():
-        try:
-            out, _ = model(seq, anticipation=ant)
-        except TypeError:
-            out, _ = model(seq)
+        out, _ = model(seq)
 
-    if out.shape[-1] == 2:
-        angles = torch.atan2(out[0, :, 0], out[0, :, 1])
-        phases = torch.remainder(angles / (2 * torch.pi), 1.0).numpy()
-    else:
-        phases = out[0, :, 0].numpy()
+    angles = torch.atan2(out[0, :, 0], out[0, :, 1])
+    phases = torch.remainder(angles / (2 * torch.pi), 1.0).numpy()
 
     frame_dur = config.frame_size / sr
     times = np.arange(frames_n) * frame_dur + frame_dur / 2
@@ -243,9 +236,6 @@ def _base_fig(title, audio_times, audio):
     fig.update_xaxes(title_text='time (s)', row=2, col=1)
     return fig
 
-def _pred_color(ant_ms):
-    return '#40e0d0' if ant_ms > 0 else '#7fff7f'  # cyan if anticipation, green if 0ms
-
 def _add_pred_trace(fig, times, phases, color, name):
     fig.add_trace(
         go.Scatter(x=times, y=phases, mode='lines', name=name,
@@ -261,8 +251,7 @@ def _add_pred_trace(fig, times, phases, color, name):
             line=dict(color=bar_rgba, width=1),
         ))
 
-def build_chunk_figure(chunk_name, pred_times=None, pred_phases=None,
-                       ant_ms=0, ref_times=None, ref_phases=None):
+def build_chunk_figure(chunk_name, pred_times=None, pred_phases=None):
     audio_times, audio, phase_times, phase, bar_times, duration = load_chunk(chunk_name)
     fig = _base_fig(chunk_name, audio_times, audio)
 
@@ -273,11 +262,7 @@ def build_chunk_figure(chunk_name, pred_times=None, pred_phases=None,
     )
 
     if pred_times is not None and pred_phases is not None:
-        label = f'prediction ({ant_ms:.0f} ms)' if ant_ms > 0 else 'prediction'
-        _add_pred_trace(fig, pred_times, pred_phases, _pred_color(ant_ms), label)
-
-    if ref_times is not None and ref_phases is not None:
-        _add_pred_trace(fig, ref_times, ref_phases, '#7fff7f', 'prediction (0 ms ref)')
+        _add_pred_trace(fig, pred_times, pred_phases, '#7fff7f', 'prediction')
 
     for t in bar_times:
         fig.add_shape(dict(
@@ -288,16 +273,12 @@ def build_chunk_figure(chunk_name, pred_times=None, pred_phases=None,
 
     return fig
 
-def build_test_figure(filename, pred_times=None, pred_phases=None,
-                      ant_ms=0, ref_times=None, ref_phases=None):
+def build_test_figure(filename, pred_times=None, pred_phases=None):
     audio_times, audio, duration = load_test_file(filename)
     fig = _base_fig(filename, audio_times, audio)
 
     if pred_times is not None and pred_phases is not None:
-        label = f'prediction ({ant_ms:.0f} ms)' if ant_ms > 0 else 'prediction'
-        _add_pred_trace(fig, pred_times, pred_phases, _pred_color(ant_ms), label)
-        if ref_times is not None and ref_phases is not None:
-            _add_pred_trace(fig, ref_times, ref_phases, '#7fff7f', 'prediction (0 ms ref)')
+        _add_pred_trace(fig, pred_times, pred_phases, '#7fff7f', 'prediction')
     else:
         fig.add_annotation(
             text='Run inference to see phase prediction',
@@ -401,13 +382,6 @@ app.layout = html.Div([
             clearable=False,
             style={'width': '100px', 'color': '#111'},
         ),
-        html.Span('Anticipation (ms):', style=LBL),
-        dcc.Input(
-            id='ant-input',
-            type='number', value=0, min=0, max=500, step=10,
-            style={'width': '70px', 'padding': '4px', 'background': '#1a1a2e',
-                   'color': '#eee', 'border': '1px solid #444', 'borderRadius': '4px'},
-        ),
         html.Button('Run inference', id='run-btn', n_clicks=0, style={
             'background': '#1a6b3c', 'color': '#fff', 'border': 'none',
             'borderRadius': '4px', 'padding': '6px 14px', 'cursor': 'pointer',
@@ -483,29 +457,21 @@ def update_epoch_options(tag):
     State('test-dd', 'value'),
     State('ckpt-tag-dd', 'value'),
     State('ckpt-epoch-dd', 'value'),
-    State('ant-input', 'value'),
     prevent_initial_call=True,
 )
-def run_inference_cb(n_clicks, source, chunk_name, test_file, ckpt_tag, ckpt_epoch, anticipation):
+def run_inference_cb(n_clicks, source, chunk_name, test_file, ckpt_tag, ckpt_epoch):
     if not ckpt_tag or ckpt_epoch is None:
         return None, 'Select a checkpoint first.'
     ckpt_rel = f'{ckpt_tag}/{ckpt_epoch}.pt'
     try:
-        ant_ms = float(anticipation or 0.0)
-        ant_s  = ant_ms / 1000.0
         if source == 'chunk' and chunk_name:
             audio_path = os.path.join(args.chunks_path, chunk_name + '.ogg')
         elif source == 'test' and test_file:
             audio_path = os.path.join(args.test_data_path, test_file)
         else:
             return None, 'No file selected.'
-        times, phases = run_inference(ckpt_rel, audio_path, ant_s)
-        result = {'times': times.tolist(), 'phases': phases.tolist(), 'ant_ms': ant_ms}
-        if ant_ms > 1:
-            ref_times, ref_phases = run_inference(ckpt_rel, audio_path, 0.0)
-            result['ref_times']  = ref_times.tolist()
-            result['ref_phases'] = ref_phases.tolist()
-        return result, f'Done — {ckpt_rel}'
+        times, phases = run_inference(ckpt_rel, audio_path)
+        return {'times': times.tolist(), 'phases': phases.tolist()}, f'Done — {ckpt_rel}'
     except Exception as e:
         return None, f'Error: {e}'
 
@@ -530,16 +496,13 @@ def clear_pred_on_change(_a, _b, _c):
     Input('pred-store', 'data'),
 )
 def update_graph(source, chunk_name, test_file, pred):
-    pt     = np.array(pred['times'])              if pred else None
-    pp     = np.array(pred['phases'])             if pred else None
-    ant_ms = pred.get('ant_ms', 0)                if pred else 0
-    rt     = np.array(pred['ref_times'])          if pred and 'ref_times'  in pred else None
-    rp     = np.array(pred['ref_phases'])         if pred and 'ref_phases' in pred else None
+    pt = np.array(pred['times'])  if pred else None
+    pp = np.array(pred['phases']) if pred else None
 
     if source == 'chunk' and chunk_name:
-        return build_chunk_figure(chunk_name, pt, pp, ant_ms, rt, rp)
+        return build_chunk_figure(chunk_name, pt, pp)
     if source == 'test' and test_file:
-        return build_test_figure(test_file, pt, pp, ant_ms, rt, rp)
+        return build_test_figure(test_file, pt, pp)
     return go.Figure()
 
 

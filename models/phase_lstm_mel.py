@@ -2,26 +2,28 @@
 PhaseLSTMMel — LSTM model with sliding-window mel spectrogram frontend.
 
 Naturally stateful: hidden state (h, c) is passed forward frame-by-frame
-during inference, making it well-suited for real-time use.
+during real-time inference.
+
+Output has 3 channels: [sin(phase), cos(phase), phase_rate]
+  - phase_rate: radians per frame (implicitly learned, no direct supervision)
+  - Application layer can apply any time offset: phase += phase_rate * offset_frames
 
 Input:
-  x            : [batch, seq_len, frame_size]  — raw audio frames
-  anticipation : [batch]                        — anticipation in seconds
-  state        : ((h, c)) or None              — LSTM state
+  x     : [batch, seq_len, frame_size]  — raw audio frames
+  state : (h, c) or None               — LSTM state
 
 Output:
-  ([batch, seq_len, 2], (h, c))  — sin/cos phase encoding + new state
+  ([batch, seq_len, 3], (h, c))
 """
 
 import torch
 import torch.nn as nn
 
-from config import frame_size, samplerate
+from config import frame_size
 from .mel_frontend import MelFrontend
 
 # ── Hyperparameters ────────────────────────────────────────────────────────────
 FFT_FRAMES = 4      # FFT window = FFT_FRAMES * frame_size samples
-                    # latency added: (FFT_FRAMES-1) * frame_size / samplerate seconds
 N_MELS     = 64
 F_MIN      = 27.5   # Hz
 F_MAX      = 8000.0 # Hz
@@ -45,7 +47,7 @@ class PhaseLSTMMel(nn.Module):
     def __init__(self):
         super().__init__()
         self.frontend    = MelFrontend(FFT_FRAMES, N_MELS, F_MIN, F_MAX)
-        self.input_proj  = nn.Linear(N_MELS + 1, HIDDEN)   # +1 for anticipation
+        self.input_proj  = nn.Linear(N_MELS, HIDDEN)
         self.lstm        = nn.LSTM(
             input_size=HIDDEN,
             hidden_size=HIDDEN,
@@ -53,36 +55,25 @@ class PhaseLSTMMel(nn.Module):
             batch_first=True,
             dropout=DROPOUT if N_LAYERS > 1 else 0.0,
         )
-        self.output_head = nn.Linear(HIDDEN, 2)
+        self.output_head = nn.Linear(HIDDEN, 3)  # sin, cos, phase_rate
 
-    def forward(self, x, anticipation=None, state=None):
-        batch, seq_len, _ = x.shape
-
-        if anticipation is None:
-            anticipation = torch.zeros(batch, device=x.device)
-
-        mel = self.frontend(x)                                      # [batch, seq_len, n_mels]
-        ant = anticipation.unsqueeze(1).expand(batch, seq_len).unsqueeze(2)
-        x   = torch.cat([mel, ant], dim=2)                         # [batch, seq_len, n_mels+1]
-        x   = self.input_proj(x)                                   # [batch, seq_len, hidden]
-
-        out, new_state = self.lstm(x, state)                       # [batch, seq_len, hidden]
-
+    def forward(self, x, state=None, **kwargs):
+        mel = self.frontend(x)               # [batch, seq_len, n_mels]
+        x   = self.input_proj(mel)           # [batch, seq_len, hidden]
+        out, new_state = self.lstm(x, state) # [batch, seq_len, hidden]
         return self.output_head(out), new_state
 
     def export_to_onnx(self, path, device):
         dummy_frames = torch.zeros(1, 100, frame_size, device=device)
-        dummy_ant    = torch.zeros(1, device=device)
         torch.onnx.export(
             self,
-            (dummy_frames, dummy_ant, None),
+            (dummy_frames,),
             path,
-            input_names=['frames', 'anticipation'],
-            output_names=['phase_sincos', 'state_h', 'state_c'],
+            input_names=['frames'],
+            output_names=['phase_out', 'state_h', 'state_c'],
             dynamic_axes={
-                'frames':       {0: 'batch', 1: 'seq_len'},
-                'anticipation': {0: 'batch'},
-                'phase_sincos': {0: 'batch', 1: 'seq_len'},
+                'frames':    {0: 'batch', 1: 'seq_len'},
+                'phase_out': {0: 'batch', 1: 'seq_len'},
             },
             opset_version=17,
         )
