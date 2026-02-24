@@ -10,12 +10,11 @@ some configuration variables
 # sizes in samples
 
 # audio config
-bitrate = 16
-samplerate = 16000
-
-chunk_duration = 32
+render_samplerate = 44100  # high-quality render (MIDI → WAV); downsample at chunk time
+samplerate = 24000         # chunk / training samplerate
+chunk_duration = 32        # seconds
 channels = 1
-frame_size = 320 # 50 FPS at 16kHz
+frame_size = 400           # 60 FPS at 24kHz  (24000 / 60 = 400)
 
 # see https://www.zem-college.de/midi/mc_tabed.htm
 note_labels = {

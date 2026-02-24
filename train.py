@@ -36,6 +36,7 @@ parser.add_argument("--continue-from-file", type=str, default=None, help="File t
 parser.add_argument("--checkpoints-path", type=str, default='checkpoints', help="path to checkpoints folder. Structure: <checkpoints_path>/<tag>/<epoch>.pt")
 parser.add_argument("-ci", "--checkpoint-interval", type=int, default=5, help="save checkpoint every n epochs")
 parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Current github tag will be used as default.")
+parser.add_argument("--experiment", type=str, default="dance", help="MLflow experiment name. All runs in the same experiment are comparable.")
 
 # hyperparameters
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
@@ -44,6 +45,7 @@ parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.95, he
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 parser.add_argument("--warmup-seconds", type=float, default=8.0, help="ignore loss in first N seconds of each sequence")
 parser.add_argument("--fft-frames", type=int, default=None, help="mel frontend: FFT window in frames (overrides model default)")
+parser.add_argument("--rate-loss-weight", type=float, default=0.1, help="weight for phase_rate MSE loss term (0 disables)")
 
 # misc
 parser.add_argument("-d", "--dataset-size", type=int, default=None, help="truncate dataset to this size. For test runs.")
@@ -185,8 +187,8 @@ def model_forward(model_local, batch_inputs):
     return model_local(batch_inputs)
 
 
-mlflow.set_experiment(args.tag)
-mlflow_run = mlflow.start_run()
+mlflow.set_experiment(args.experiment)
+mlflow_run = mlflow.start_run(run_name=args.tag)
 mlflow.log_params({
     'model':          args.model,
     'learning_rate':  args.learning_rate,
@@ -222,14 +224,17 @@ for epoch in range(first_epoch, last_epoch):
     train_total_loss = 0
     train_num_batches = 0
 
-    for i, (batch_inputs, phase_labels, _) in enumerate(train_loader):
+    train_rate_loss_total = 0
+
+    for i, (batch_inputs, phase_labels, rate_labels, _) in enumerate(train_loader):
 
         if not args.summarize:
             print('\rbatch', i + 1, 'of', (train_size - 1) // batch_size + 1, end='\r', flush=True)
 
         start_calc = time.time()
-        batch_inputs = batch_inputs.to(device)
-        phase_labels = phase_labels.to(device)
+        batch_inputs = batch_inputs.to(device, non_blocking=True)
+        phase_labels = phase_labels.to(device, non_blocking=True)
+        rate_labels  = rate_labels.to(device, non_blocking=True)
         input_frames  = batch_inputs.shape[1]
         target_labels = phase_labels[:, :input_frames]
         to_device_time = time.time() - start_calc
@@ -237,7 +242,7 @@ for epoch in range(first_epoch, last_epoch):
         # Forward pass
         start_calc = time.time()
         outputs, _ = model_forward(model, batch_inputs)
-        phase_outputs = outputs[:, :, :2]   # sin/cos; ignore phase_rate if present
+        phase_outputs = outputs[:, :, :2]   # sin/cos
         forward_time += time.time() - start_calc
 
         # Zero out the gradients
@@ -245,12 +250,21 @@ for epoch in range(first_epoch, last_epoch):
 
         # Compute the loss
         start_calc = time.time()
-        loss = criterion(phase_outputs, target_labels)
+        loss_phase = criterion(phase_outputs, target_labels)
+        loss = loss_phase
+        if args.rate_loss_weight > 0 and outputs.shape[-1] > 2:
+            warmup = min(warmup_frames, input_frames - 1)
+            rate_outputs = outputs[:, warmup:, 2]
+            gt_rate = rate_labels[:, :input_frames][:, warmup:]
+            loss_rate = ((rate_outputs - gt_rate) ** 2).mean()
+            loss = loss_phase + args.rate_loss_weight * loss_rate
+            train_rate_loss_total += loss_rate.item()
         loss_calc_time += time.time() - start_calc
 
         # Backpropagation
         start_calc = time.time()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         backpropagation_time = time.time() - start_calc
 
         optimizer.step()
@@ -258,6 +272,9 @@ for epoch in range(first_epoch, last_epoch):
         train_num_batches += 1
 
     train_loss = train_total_loss / train_num_batches
+    train_rate_loss = train_rate_loss_total / train_num_batches
+    val_loss = 0.0
+    val_rate_loss = 0.0
     print()
     print(f"Training loss:   {train_loss:.4f}")
 
@@ -272,24 +289,35 @@ for epoch in range(first_epoch, last_epoch):
             total_loss = 0
             total_batches = 0
 
-            for i, (val_inputs, val_phase_labels, _) in enumerate(val_loader):
+            val_rate_loss_total = 0
+
+            for i, (val_inputs, val_phase_labels, val_rate_labels, _) in enumerate(val_loader):
 
                 if not args.summarize:
                     print('\rbatch', i + 1, 'of', (val_size - 1) // batch_size + 1, end='\r', flush=True)
 
-                val_inputs = val_inputs.to(device)
-                val_phase_labels = val_phase_labels.to(device)
-                val_target_labels = val_phase_labels[:, :val_inputs.shape[1]]
+                val_inputs = val_inputs.to(device, non_blocking=True)
+                val_phase_labels = val_phase_labels.to(device, non_blocking=True)
+                val_rate_labels  = val_rate_labels.to(device, non_blocking=True)
+                val_input_frames = val_inputs.shape[1]
+                val_target_labels = val_phase_labels[:, :val_input_frames]
 
                 val_outputs, _ = model_forward(model, val_inputs)
                 val_phase_outputs = val_outputs[:, :, :2]
 
                 loss = criterion(val_phase_outputs, val_target_labels)
+                if args.rate_loss_weight > 0 and val_outputs.shape[-1] > 2:
+                    warmup = min(warmup_frames, val_input_frames - 1)
+                    val_rate_out = val_outputs[:, warmup:, 2]
+                    val_gt_rate  = val_rate_labels[:, :val_input_frames][:, warmup:]
+                    val_rate_loss_batch = ((val_rate_out - val_gt_rate) ** 2).mean()
+                    val_rate_loss_total += val_rate_loss_batch.item()
 
                 total_loss += loss
                 total_batches += 1
 
             val_loss = total_loss / total_batches
+            val_rate_loss = val_rate_loss_total / total_batches
             avg_loss_sum += val_loss
             print()
             print(f"Validation loss: {val_loss:.4f}")
@@ -321,9 +349,14 @@ for epoch in range(first_epoch, last_epoch):
 
     # append loss to log file
     with open(f"{save_path}loss.csv", 'a', encoding='utf8') as f:
-        f.write(f"{epoch_1},{train_loss},{val_loss}\n")
+        f.write(f"{epoch_1},{train_loss},{val_loss},{train_rate_loss}\n")
 
-    mlflow.log_metrics({'train_loss': float(train_loss), 'val_loss': float(val_loss)}, step=epoch_1)
+    mlflow.log_metrics({
+        'train_loss':      float(train_loss),
+        'val_loss':        float(val_loss),
+        'train_rate_loss': float(train_rate_loss),
+        'val_rate_loss':   float(val_rate_loss) if val_loader is not None else 0.0,
+    }, step=epoch_1)
 
 print(f"\nTotal training time: {toal_time:.2f} seconds")
 print(f"Total forward pass time: {forward_time:.2f} seconds ({forward_time / toal_time * 100:.2f}%)")

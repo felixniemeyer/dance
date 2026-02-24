@@ -23,7 +23,7 @@ from config import frame_size
 from .mel_frontend import MelFrontend
 
 # ── Default hyperparameters ────────────────────────────────────────────────────
-FFT_FRAMES = 4      # FFT window = FFT_FRAMES * frame_size samples
+FFT_FRAMES = 2      # FFT window = FFT_FRAMES * frame_size samples
 N_MELS     = 64
 F_MIN      = 27.5   # Hz
 F_MAX      = 8000.0 # Hz
