@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import random
+import shutil
 import sys
 import tempfile
 import time
@@ -97,10 +98,10 @@ def process_song(midifile_str, soundfont, midi_rel, duration, bar_starts):
         if not ok:
             return False
 
-        # Move WAV to final location
+        # Move WAV to final location (shutil.move handles cross-device)
         if args.overwrite and os.path.exists(wav_path):
             os.remove(wav_path)
-        os.rename(tmpwav, wav_path)
+        shutil.move(tmpwav, wav_path)
         tmpwav = None  # prevent deletion in finally
 
         # Write JSON
