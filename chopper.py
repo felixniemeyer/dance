@@ -2,7 +2,7 @@
 Chop rendered WAV files into training chunks with tempo/pitch augmentation.
 
 Usage:
-    python chunk.py \
+    python chopper.py \
         --in-path data/rendered/v2 \
         --out-path data/chunks/v2 \
         --chunks-per-song 3

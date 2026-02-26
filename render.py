@@ -18,6 +18,7 @@ import random
 import shutil
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -31,6 +32,7 @@ from midi_utils import (
     has_note_phase_alignment,
     has_valid_time_signature,
     jitter_drum_notes,
+    max_silence_gap_seconds,
     read_events,
     read_note_on_ticks,
     render_wav,
@@ -44,8 +46,10 @@ parser.add_argument('--single-soundfont', type=str, default=None,
 parser.add_argument('--out-path', type=str, required=True)
 parser.add_argument('--target-count', type=int, default=None,
     help='stop after this many successfully processed songs')
-parser.add_argument('--max-song-length', type=int, default=60 * 20,
+parser.add_argument('--max-song-length', type=int, default=60 * 8,
     help='skip songs longer than this many seconds')
+parser.add_argument('--max-silence-seconds', type=float, default=60.0,
+    help='skip songs with a silence gap longer than this many seconds between note-on events')
 parser.add_argument('--midi-jitter-max-seconds', type=float, default=0.05,
     help='max jitter on drum note_on events in seconds. 0 disables jitter.')
 parser.add_argument('--overwrite', default=False, action='store_true')
@@ -57,7 +61,14 @@ parser.add_argument('--min-aligned-note-ratio', type=float, default=0.6)
 parser.add_argument('--min-notes-for-alignment-check', type=int, default=24)
 parser.add_argument('--max-processes', type=int, default=4,
     help='max concurrent fluidsynth render processes')
+parser.add_argument('--max-concurrent-renders', type=int, default=None,
+    help='max concurrent disk-writing renders (default: same as --max-processes). '
+         'Lower this if you hit disk quota errors from simultaneous large WAV writes.')
 args = parser.parse_args()
+
+_render_semaphore = threading.Semaphore(
+    args.max_concurrent_renders if args.max_concurrent_renders is not None else args.max_processes
+)
 
 os.makedirs(args.out_path, exist_ok=True)
 
@@ -97,7 +108,8 @@ def process_song(midifile_str, soundfont, midi_rel, duration, bar_starts):
             if args.render_timeout_seconds is not None
             else max(120, duration * 10)
         )
-        ok = render_wav(render_midi_path, tmpwav, soundfont, timeout_s, render_samplerate)
+        with _render_semaphore:
+            ok = render_wav(render_midi_path, tmpwav, soundfont, timeout_s, render_samplerate)
         if not ok:
             return False
 
@@ -145,6 +157,9 @@ def _validate_midi(midifile, soundfonts):
         )
         if not aligned_ok:
             return None, f'poor alignment ({aligned_ratio:.2f}/{aligned_count})'
+        silence = max_silence_gap_seconds(note_ticks, tempo_changes, mid.ticks_per_beat)
+        if silence > args.max_silence_seconds:
+            return None, f'too much silence ({silence:.0f}s gap)'
         bar_starts = calc_bar_starts_in_seconds(
             time_signatures, tempo_changes, mid.ticks_per_beat, max_tick)
         if len(bar_starts) < 2:

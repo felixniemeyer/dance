@@ -38,7 +38,7 @@ from midi_utils import (
     read_note_on_ticks,
     render_wav,
 )
-from chunk import process_audio
+from chopper import process_audio
 
 parser = argparse.ArgumentParser(
     description='Render MIDI + chunk in one pass (no persistent WAV).')

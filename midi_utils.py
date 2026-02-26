@@ -117,6 +117,14 @@ def has_note_phase_alignment(
     return ratio >= min_ratio, ratio, total
 
 
+def max_silence_gap_seconds(note_ticks, tempo_changes, ticks_per_beat):
+    """Return the longest gap between consecutive note-on events, in seconds."""
+    if len(note_ticks) < 2:
+        return 0.0
+    note_times = ticks_to_seconds(note_ticks, tempo_changes, ticks_per_beat)
+    return max(note_times[i + 1] - note_times[i] for i in range(len(note_times) - 1))
+
+
 def ticks_to_seconds(ticks, tempo_changes, ticks_per_beat):
     if not ticks:
         return []
