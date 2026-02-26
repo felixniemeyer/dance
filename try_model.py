@@ -15,7 +15,6 @@ parser.add_argument("path", type=str, help="common path to all checkpoints")
 parser.add_argument("checkpoints", nargs="*", type=str, help="Checkpoints")
 parser.add_argument("-p", "--dataset-path", type=str, default="data/chunks/lakh_clean", help="path to dataset")
 parser.add_argument("-d", "--device-type", type=str, default="cpu", help="device type (cpu or cuda)")
-parser.add_argument("-a", "--anticipation", type=float, default=0.0, help="anticipation in seconds")
 args = parser.parse_args()
 
 ds = DanceDataset(args.dataset_path, frame_size, samplerate)
@@ -44,7 +43,6 @@ while True:
     gt.legend(loc='upper right')
 
     model_input = frames.unsqueeze(0).to(args.device_type)
-    anticipation = torch.tensor([args.anticipation], device=args.device_type, dtype=torch.float32)
 
     for ci, checkpoint in enumerate(args.checkpoints):
         cpp = os.path.join(args.path, checkpoint)
@@ -53,18 +51,9 @@ while True:
         model.eval()
 
         with torch.no_grad():
-            try:
-                output, _ = model(model_input, anticipation=anticipation)
-            except TypeError:
-                output, _ = model(model_input)
-
-            if output.shape[-1] == 2:
-                angles = torch.atan2(output[0, :, 0], output[0, :, 1])
-                predicted_phase = torch.remainder(angles / (2 * torch.pi), 1.0).cpu().numpy()
-            elif output.shape[-1] == 1:
-                predicted_phase = output[0, :, 0].cpu().numpy()
-            else:
-                raise ValueError('Unsupported output shape: ' + str(output.shape))
+            output, _ = model(model_input)
+            angles = torch.atan2(output[0, :, 0], output[0, :, 1])
+            predicted_phase = torch.remainder(angles / (2 * torch.pi), 1.0).cpu().numpy()
 
         ax = axes[ci + 1]
         ax.plot(xvalues, predicted_phase, color='tab:orange', linewidth=1, label=checkpoint)

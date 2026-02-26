@@ -15,6 +15,9 @@ from .cr import CR
 from .crs import CRS
 from .phase_tcn import PhaseTCN
 from .phase_tcn_mel import PhaseTCNMel
+from .phase_lstm_mel import PhaseLSTMMel
+from .phase_gru_mel import PhaseGRUMel
+from .phase_gru import PhaseGRU
 
 models = {
     'cnn_only': CNNOnly,
@@ -32,6 +35,9 @@ models = {
     'CRS': CRS,
     'phase_tcn': PhaseTCN,
     'phase_tcn_mel': PhaseTCNMel,
+    'phase_lstm_mel': PhaseLSTMMel,
+    'phase_gru_mel': PhaseGRUMel,
+    'phase_gru': PhaseGRU,
 }
 
 def getModels():
@@ -54,7 +60,11 @@ def loadModel(file):
 
     print('loading model: ', model_type)
 
-    model = modelClass()
+    model_hparams = obj.get('model_hparams', {})
+    try:
+        model = modelClass(**model_hparams)
+    except TypeError:
+        model = modelClass()
     model.load_state_dict(obj['model_state_dict'])
 
     return model, obj
@@ -62,8 +72,10 @@ def loadModel(file):
 def saveModel(file, model, obj):
     for model_type, model_class in models.items():
         if isinstance(model, model_class):
-            torch.save({
+            save_obj = {
                 'model_type': model_type,
                 'model_state_dict': model.state_dict(),
-                **obj
-            }, file)
+            }
+            if hasattr(model, 'hparams'):
+                save_obj['model_hparams'] = model.hparams
+            torch.save({**save_obj, **obj}, file)

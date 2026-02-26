@@ -34,8 +34,7 @@ import soundfile
 from config import chunk_duration, frame_size, samplerate
 
 # Extra seconds of phase labels written beyond the audio chunk duration.
-# This enables anticipation targets up to +1.0s without clamping to the
-# final in-chunk label frame.
+# Provides a small buffer of future phase values beyond the chunk end.
 phase_label_extra_seconds = 1.0
 
 # ── CLI args ──────────────────────────────────────────────────────────────────
@@ -234,7 +233,9 @@ def abbreviate(s):
 # ── MIDI jitter (from render_midi.py) ─────────────────────────────────────────
 
 def jitter_drum_notes(mid, max_seconds):
-    jittered = mido.MidiFile(ticks_per_beat=mid.ticks_per_beat, type=mid.type)
+    n_tracks = len(mid.tracks)
+    midi_type = 0 if n_tracks == 1 else 1
+    jittered = mido.MidiFile(ticks_per_beat=mid.ticks_per_beat, type=midi_type)
     max_ticks = int(max_seconds * 2 * mid.ticks_per_beat)
 
     for track in mid.tracks:
@@ -279,31 +280,14 @@ def render_wav(midifile, wavfile, soundfont, timeout_s):
         except subprocess.TimeoutExpired:
             p.kill()
             p.communicate()
-            print('  FluidSynth render timed out; trying TiMidity fallback')
-        else:
-            if p.returncode == 0 and os.path.exists(wavfile):
-                return True
-            print(f'  FluidSynth failed with code {p.returncode}; trying TiMidity fallback')
-
-    timidity_cmd = [
-        'timidity',
-        midifile,
-        '-Ow',
-        '-o', wavfile,
-        '-s', str(samplerate),
-        '-x', f"soundfont '{soundfont.path}'",
-        '--preserve-silence',
-    ]
-    with subprocess.Popen(timidity_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE) as p:
-        try:
-            p.communicate(timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            p.kill()
-            p.communicate()
-            print('  TiMidity render timed out')
+            print('  FluidSynth render timed out; skipping')
             return False
 
-    return p.returncode == 0 and os.path.exists(wavfile)
+    if p.returncode != 0 or not os.path.exists(wavfile):
+        print(f'  FluidSynth failed with code {p.returncode}; skipping')
+        return False
+
+    return True
 
 # ── chunk writer (runs in thread) ─────────────────────────────────────────────
 

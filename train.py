@@ -11,6 +11,7 @@ import re
 
 import subprocess
 
+import mlflow
 import torch
 from torch import nn, optim
 from torch.utils.data import DataLoader, random_split
@@ -33,17 +34,18 @@ parser.add_argument("--continue-from-file", type=str, default=None, help="File t
 
 # out
 parser.add_argument("--checkpoints-path", type=str, default='checkpoints', help="path to checkpoints folder. Structure: <checkpoints_path>/<tag>/<epoch>.pt")
-parser.add_argument("-ci", "--checkpoint-interval", type=int, default=1, help="save checkpoint every n epochs")
+parser.add_argument("-ci", "--checkpoint-interval", type=int, default=5, help="save checkpoint every n epochs")
 parser.add_argument("-t", "--tag", type=str, help="Tag to save checkpoint to. Current github tag will be used as default.")
+parser.add_argument("--experiment", type=str, default="dance", help="MLflow experiment name. All runs in the same experiment are comparable.")
 
 # hyperparameters
 parser.add_argument("-e", "--num-epochs", type=int, default=1, help="number of epochs to train for")
 parser.add_argument("-r", "--learning-rate", type=float, default=1e-4, help="learning rate")
 parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.95, help="learning rate decay")
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
-parser.add_argument("--anticipation-min", type=float, default=0.0, help="minimum anticipation in seconds")
-parser.add_argument("--anticipation-max", type=float, default=1.0, help="maximum anticipation in seconds")
 parser.add_argument("--warmup-seconds", type=float, default=8.0, help="ignore loss in first N seconds of each sequence")
+parser.add_argument("--fft-frames", type=int, default=None, help="mel frontend: FFT window in frames (overrides model default)")
+parser.add_argument("--rate-loss-weight", type=float, default=0.1, help="weight for phase_rate MSE loss term (0 disables)")
 
 # misc
 parser.add_argument("-d", "--dataset-size", type=int, default=None, help="truncate dataset to this size. For test runs.")
@@ -54,10 +56,6 @@ parser.add_argument("--onnx", action='store_true', help="export model to onnx. S
 
 args = parser.parse_args()
 
-if args.anticipation_min < 0 or args.anticipation_max < 0:
-    raise ValueError('anticipation values must be non-negative')
-if args.anticipation_max < args.anticipation_min:
-    raise ValueError('anticipation-max must be >= anticipation-min')
 if args.warmup_seconds < 0:
     raise ValueError('warmup-seconds must be >= 0')
 
@@ -89,6 +87,11 @@ os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
 batch_size = args.batch_size
 
+# Build model kwargs from CLI overrides
+model_kwargs = {}
+if args.fft_frames is not None:
+    model_kwargs['fft_frames'] = args.fft_frames
+
 # Initialize the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -112,16 +115,13 @@ val_size = data_size - train_size
 
 train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True) if val_size > 0 else None
+num_workers = max(1, os.cpu_count() - 1)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=True, pin_memory=True, multiprocessing_context='fork')
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=True, pin_memory=True, multiprocessing_context='fork') if val_size > 0 else None
 
 # Load model from disk if it exists
 first_epoch = 0
-model = None
-optimizer = None
-
 model_class = getModelClass(args.model)
-model = model_class().to(device)
 
 if args.continue_from is not None:
     args.continue_from_file = f"{args.checkpoints_path}/{args.tag}/{args.continue_from}.pt"
@@ -133,13 +133,21 @@ if args.continue_from_file is not None:
 
         optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
         optimizer.load_state_dict(obj['optimizer_state_dict'])
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = args.learning_rate
 
         first_epoch = obj['epoch']
-        print('loaded checkpoint from', args.continue_from)
+        print('loaded checkpoint from', args.continue_from_file)
+        print(f'learning rate set to {args.learning_rate}')
     except FileNotFoundError:
-        print('no checkpoint found at', args.continue_from)
+        print('no checkpoint found at', args.continue_from_file)
         sys.exit()
 else:
+    try:
+        model = model_class(**model_kwargs).to(device)
+    except TypeError as e:
+        print(f'Warning: model does not accept kwargs {model_kwargs}: {e}')
+        model = model_class().to(device)
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 
 # scale down learning rate after each epoch
@@ -175,44 +183,24 @@ class CustomLoss(nn.Module):
 criterion = CustomLoss(warmup_frames)
 
 
-def sample_anticipation(batch_size_local, device_local):
-    random_values = torch.rand(batch_size_local, device=device_local)
-    return args.anticipation_min + random_values * (args.anticipation_max - args.anticipation_min)
+def model_forward(model_local, batch_inputs):
+    return model_local(batch_inputs)
 
 
-def create_future_phase_labels(phase_labels, anticipation, input_frames):
-    # phase_labels shape: [batch, label_frames] with values in [0,1)
-    # predictions are produced for input_frames; labels may include extra look-ahead.
-    if input_frames > phase_labels.shape[1]:
-        input_frames = phase_labels.shape[1]
-
-    frame_indices = torch.arange(input_frames, device=phase_labels.device, dtype=phase_labels.dtype).unsqueeze(0)
-    offset_in_frames = (anticipation / frame_duration).unsqueeze(1)
-    lookup_index = frame_indices + offset_in_frames
-
-    low = torch.floor(lookup_index).long().clamp(max=phase_labels.shape[1] - 1)
-    high = (low + 1).clamp(max=phase_labels.shape[1] - 1)
-    w = lookup_index - low.float()
-
-    low_values = phase_labels.gather(1, low)
-    high_values = phase_labels.gather(1, high)
-
-    low_angle = low_values * 2 * torch.pi
-    high_angle = high_values * 2 * torch.pi
-
-    x = torch.cos(low_angle) * (1 - w) + torch.cos(high_angle) * w
-    y = torch.sin(low_angle) * (1 - w) + torch.sin(high_angle) * w
-    angle = torch.atan2(y, x)
-
-    return torch.remainder(angle / (2 * torch.pi), 1.0)
-
-
-def model_forward(model_local, batch_inputs, anticipation):
-    try:
-        return model_local(batch_inputs, anticipation=anticipation)
-    except TypeError:
-        return model_local(batch_inputs)
-
+mlflow.set_experiment(args.experiment)
+mlflow_run = mlflow.start_run(run_name=args.tag)
+mlflow.log_params({
+    'model':          args.model,
+    'learning_rate':  args.learning_rate,
+    'lr_decay':       args.learning_rate_decay,
+    'batch_size':     args.batch_size,
+    'warmup_seconds': args.warmup_seconds,
+    'continued_from': args.continue_from,
+    'chunks_path':    args.chunks_path,
+    'dataset_size':   len(dataset),
+})
+if hasattr(model, 'hparams'):
+    mlflow.log_params(model.hparams)
 
 avg_loss_sum = 0
 toal_time = 0
@@ -236,23 +224,25 @@ for epoch in range(first_epoch, last_epoch):
     train_total_loss = 0
     train_num_batches = 0
 
-    for i, (batch_inputs, phase_labels, _) in enumerate(train_loader):
+    train_rate_loss_total = 0
+
+    for i, (batch_inputs, phase_labels, rate_labels, _) in enumerate(train_loader):
 
         if not args.summarize:
             print('\rbatch', i + 1, 'of', (train_size - 1) // batch_size + 1, end='\r', flush=True)
 
         start_calc = time.time()
-        batch_inputs = batch_inputs.to(device)
-        phase_labels = phase_labels.to(device)
-        anticipation = sample_anticipation(batch_inputs.shape[0], device)
-        target_labels = create_future_phase_labels(phase_labels, anticipation, batch_inputs.shape[1])
+        batch_inputs = batch_inputs.to(device, non_blocking=True)
+        phase_labels = phase_labels.to(device, non_blocking=True)
+        rate_labels  = rate_labels.to(device, non_blocking=True)
+        input_frames  = batch_inputs.shape[1]
+        target_labels = phase_labels[:, :input_frames]
         to_device_time = time.time() - start_calc
 
         # Forward pass
         start_calc = time.time()
-        outputs, _ = model_forward(model, batch_inputs, anticipation)
-        if outputs.shape[-1] != 2:
-            raise ValueError('Model must output [sin, cos] per frame. Got shape: ' + str(outputs.shape))
+        outputs, _ = model_forward(model, batch_inputs)
+        phase_outputs = outputs[:, :, :2]   # sin/cos
         forward_time += time.time() - start_calc
 
         # Zero out the gradients
@@ -260,20 +250,33 @@ for epoch in range(first_epoch, last_epoch):
 
         # Compute the loss
         start_calc = time.time()
-        loss = criterion(outputs, target_labels)
+        loss_phase = criterion(phase_outputs, target_labels)
+        loss = loss_phase
+        if args.rate_loss_weight > 0 and outputs.shape[-1] > 2:
+            warmup = min(warmup_frames, input_frames - 1)
+            rate_outputs = outputs[:, warmup:, 2]
+            gt_rate = rate_labels[:, :input_frames][:, warmup:]
+            loss_rate = ((rate_outputs - gt_rate) ** 2).mean()
+            loss = loss_phase + args.rate_loss_weight * loss_rate
+            train_rate_loss_total += loss_rate.item()
         loss_calc_time += time.time() - start_calc
 
         # Backpropagation
         start_calc = time.time()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         backpropagation_time = time.time() - start_calc
 
         optimizer.step()
         train_total_loss += loss.item()
         train_num_batches += 1
 
+    train_loss = train_total_loss / train_num_batches
+    train_rate_loss = train_rate_loss_total / train_num_batches
+    val_loss = 0.0
+    val_rate_loss = 0.0
     print()
-    print(f"Training loss:   {train_total_loss / train_num_batches:.4f}")
+    print(f"Training loss:   {train_loss:.4f}")
 
     scheduler.step()
 
@@ -286,28 +289,38 @@ for epoch in range(first_epoch, last_epoch):
             total_loss = 0
             total_batches = 0
 
-            for i, (val_inputs, val_phase_labels, _) in enumerate(val_loader):
+            val_rate_loss_total = 0
+
+            for i, (val_inputs, val_phase_labels, val_rate_labels, _) in enumerate(val_loader):
 
                 if not args.summarize:
                     print('\rbatch', i + 1, 'of', (val_size - 1) // batch_size + 1, end='\r', flush=True)
 
-                val_inputs = val_inputs.to(device)
-                val_phase_labels = val_phase_labels.to(device)
-                anticipation = sample_anticipation(val_inputs.shape[0], device)
-                val_target_labels = create_future_phase_labels(val_phase_labels, anticipation, val_inputs.shape[1])
+                val_inputs = val_inputs.to(device, non_blocking=True)
+                val_phase_labels = val_phase_labels.to(device, non_blocking=True)
+                val_rate_labels  = val_rate_labels.to(device, non_blocking=True)
+                val_input_frames = val_inputs.shape[1]
+                val_target_labels = val_phase_labels[:, :val_input_frames]
 
-                val_outputs, _ = model_forward(model, val_inputs, anticipation)
-                if val_outputs.shape[-1] != 2:
-                    raise ValueError('Model must output [sin, cos] per frame. Got shape: ' + str(val_outputs.shape))
+                val_outputs, _ = model_forward(model, val_inputs)
+                val_phase_outputs = val_outputs[:, :, :2]
 
-                loss = criterion(val_outputs, val_target_labels)
+                loss = criterion(val_phase_outputs, val_target_labels)
+                if args.rate_loss_weight > 0 and val_outputs.shape[-1] > 2:
+                    warmup = min(warmup_frames, val_input_frames - 1)
+                    val_rate_out = val_outputs[:, warmup:, 2]
+                    val_gt_rate  = val_rate_labels[:, :val_input_frames][:, warmup:]
+                    val_rate_loss_batch = ((val_rate_out - val_gt_rate) ** 2).mean()
+                    val_rate_loss_total += val_rate_loss_batch.item()
 
                 total_loss += loss
                 total_batches += 1
 
-            avg_loss_sum += total_loss / total_batches
+            val_loss = total_loss / total_batches
+            val_rate_loss = val_rate_loss_total / total_batches
+            avg_loss_sum += val_loss
             print()
-            print(f"Validation loss: {loss:.4f}")
+            print(f"Validation loss: {val_loss:.4f}")
     else:
         print('Validation skipped (dataset too small for split)')
 
@@ -326,8 +339,6 @@ for epoch in range(first_epoch, last_epoch):
             'hyperparameters': {
                 'learning_rate': args.learning_rate,
                 'batch_size': args.batch_size,
-                'anticipation_min': args.anticipation_min,
-                'anticipation_max': args.anticipation_max,
                 'warmup_seconds': args.warmup_seconds,
                 'continued_from': args.continue_from,
             }
@@ -338,7 +349,14 @@ for epoch in range(first_epoch, last_epoch):
 
     # append loss to log file
     with open(f"{save_path}loss.csv", 'a', encoding='utf8') as f:
-        f.write(f"{epoch_1},{loss}\n")
+        f.write(f"{epoch_1},{train_loss},{val_loss},{train_rate_loss}\n")
+
+    mlflow.log_metrics({
+        'train_loss':      float(train_loss),
+        'val_loss':        float(val_loss),
+        'train_rate_loss': float(train_rate_loss),
+        'val_rate_loss':   float(val_rate_loss) if val_loader is not None else 0.0,
+    }, step=epoch_1)
 
 print(f"\nTotal training time: {toal_time:.2f} seconds")
 print(f"Total forward pass time: {forward_time:.2f} seconds ({forward_time / toal_time * 100:.2f}%)")
@@ -349,7 +367,9 @@ print(f"Total to device time: {to_device_time:.2f} seconds ({to_device_time / to
 epoch_count = last_epoch - first_epoch
 print(f"\nAverage time per epoch: {toal_time / epoch_count:.2f} seconds")
 print(f"\nAverage validation loss: {avg_loss_sum / epoch_count:.4f}")
-print(f"Final validation loss: {loss:.4f}")
+print(f"Final validation loss: {val_loss:.4f}")
+
+mlflow.end_run()
 
 if args.plot_loss:
     subprocess.run(['python', 'plot_loss.py', f"{save_path}loss.csv"])
