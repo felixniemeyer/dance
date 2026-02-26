@@ -17,5 +17,7 @@ midi_files/
 realworld-test-data/
 
 chunks/
+rendered/
+smoketests/
 mlflow.db
 nohup.out

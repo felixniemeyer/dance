@@ -49,6 +49,7 @@ parser.add_argument("--rate-loss-weight", type=float, default=0.1, help="weight 
 
 # misc
 parser.add_argument("-d", "--dataset-size", type=int, default=None, help="truncate dataset to this size. For test runs.")
+parser.add_argument("--num-workers", type=int, default=None, help="DataLoader worker count. Defaults to min(4, cpu_count-1).")
 parser.add_argument("--summarize", action='store_true', help="don't log, show only summary at the end")
 parser.add_argument("--plot-loss", action='store_true', default=False, help="plot loss after training")
 
@@ -115,7 +116,7 @@ val_size = data_size - train_size
 
 train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
-num_workers = max(1, os.cpu_count() - 1)
+num_workers = args.num_workers if args.num_workers is not None else min(4, max(1, os.cpu_count() - 1))
 train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=True, pin_memory=True, multiprocessing_context='fork')
 val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=True, pin_memory=True, multiprocessing_context='fork') if val_size > 0 else None
 

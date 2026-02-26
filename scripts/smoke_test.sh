@@ -16,11 +16,11 @@ DEVICE_TYPE="${DEVICE_TYPE:-cpu}"
 MIDI_PATH="${MIDI_PATH:-midi_files}"
 SOUNDFONT_PATH="${SOUNDFONT_PATH:-soundfonts}"
 
-RUN_ID="${RUN_ID:-smoke-$(date +%Y%m%d-%H%M%S)}"
-RENDERED_PATH="${RENDERED_PATH:-data/smoke-rendered/${RUN_ID}}"
-CHUNKS_PATH="${CHUNKS_PATH:-data/smoke-chunks/${RUN_ID}}"
-CHECKPOINTS_PATH="${CHECKPOINTS_PATH:-checkpoints}"
-TAG="${TAG:-${RUN_ID}}"
+RUN_ID="${RUN_ID:-$(date +%Y%m%d-%H%M%S)}"
+RENDERED_PATH="${RENDERED_PATH:-smoketests/rendered/${RUN_ID}}"
+CHUNKS_PATH="${CHUNKS_PATH:-smoketests/chunks/${RUN_ID}}"
+CHECKPOINTS_PATH="${CHECKPOINTS_PATH:-smoketests/checkpoints}"
+TAG="${TAG:-smoke-${RUN_ID}}"
 
 if [[ ! -x "$PYTHON_BIN" ]]; then
   echo "python not found/executable: $PYTHON_BIN"
@@ -53,8 +53,9 @@ echo "device:          $DEVICE_TYPE"
 echo "midi path:       $MIDI_PATH"
 echo "soundfont path:  $SOUNDFONT_PATH"
 echo "run id:          $RUN_ID"
-echo "rendered path:   $RENDERED_PATH"
-echo "chunks path:     $CHUNKS_PATH"
+echo "rendered:        $RENDERED_PATH"
+echo "chunks:          $CHUNKS_PATH"
+echo "checkpoints:     $CHECKPOINTS_PATH"
 echo "tag:             $TAG"
 echo
 
@@ -106,7 +107,8 @@ echo "== Step 3/4: train (1 epoch) =="
   --num-epochs 1 \
   --batch-size 2 \
   --learning-rate 1e-4 \
-  --warmup-seconds 4.0
+  --warmup-seconds 4.0 \
+  --num-workers 2
 
 CHECKPOINT_FILE="$CHECKPOINTS_PATH/$TAG/1.pt"
 if [[ ! -f "$CHECKPOINT_FILE" ]]; then

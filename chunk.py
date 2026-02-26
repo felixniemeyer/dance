@@ -40,9 +40,8 @@ parser.add_argument('--chunks-per-song', type=int, default=3)
 parser.add_argument('--pitch-range', type=float, default=2.0,
     help='max pitch shift in semitones (applied after tempo augmentation)')
 parser.add_argument('--overwrite', default=False, action='store_true')
-args = parser.parse_args()
 
-os.makedirs(args.out_path, exist_ok=True)
+args = None  # set by main() when run as script
 
 TEMPO_MODES   = ['none', 'uniform', 'sudden_jump', 'gradual']
 TEMPO_WEIGHTS = [0.25,   0.25,     0.35,          0.15]
@@ -233,31 +232,23 @@ def _make_chunk(audio, bar_starts, start_s):
     return None, None
 
 
-def process_song(wav_path, json_path):
-    """Generate args.chunks_per_song chunks from one song. Returns number written."""
-    try:
-        audio, sr = soundfile.read(wav_path, dtype='float32')
-        if audio.ndim == 2:
-            audio = audio.mean(axis=1)
-        if sr != CHUNK_SR:
-            audio = librosa.resample(audio, orig_sr=sr, target_sr=CHUNK_SR)
-        with open(json_path, 'r', encoding='utf8') as f:
-            meta = json.load(f)
-        bar_starts = meta['bar_starts']
-    except Exception as e:
-        print(f'  Load error: {e}')
-        return 0
+def process_audio(audio, bar_starts, stem, out_path, n_chunks, pitch_range=2.0, overwrite=False):
+    """
+    Core chunking logic on already-loaded, already-resampled audio (float32 at CHUNK_SR).
 
+    stem:     base name for output files (no extension, no directory)
+    out_path: directory to write .ogg + .bars pairs
+    Returns:  number of chunks written
+    """
     song_dur = len(audio) / CHUNK_SR
     # Need at least chunk_duration plus headroom for worst-case sudden_jump (f=2, t_split=26)
     if song_dur < chunk_duration + 2:
         print(f'  Song too short ({song_dur:.1f}s), skipping')
         return 0
 
-    stem = Path(wav_path).stem
     written = 0
 
-    for i in range(args.chunks_per_song):
+    for i in range(n_chunks):
         # Leave enough source headroom; worst-case sudden_jump f=2 needs ~58s of source
         max_needed_src = chunk_duration * 2.5
         max_start = max(0.0, song_dur - max_needed_src)
@@ -268,7 +259,7 @@ def process_song(wav_path, json_path):
             continue
 
         # Pitch shift (applied after tempo, before writing)
-        n_steps = random.uniform(-args.pitch_range, args.pitch_range)
+        n_steps = random.uniform(-pitch_range, pitch_range)
         if abs(n_steps) >= 0.01:
             chunk_audio = librosa.effects.pitch_shift(
                 chunk_audio.astype(np.float32), sr=CHUNK_SR, n_steps=n_steps)
@@ -278,8 +269,8 @@ def process_song(wav_path, json_path):
         if peak > 0:
             chunk_audio = chunk_audio / peak
 
-        out_stem = os.path.join(args.out_path, f'{stem}__{i:03d}')
-        if not args.overwrite and os.path.exists(out_stem + '.ogg'):
+        out_stem = os.path.join(out_path, f'{stem}__{i:03d}')
+        if not overwrite and os.path.exists(out_stem + '.ogg'):
             written += 1  # count already-done as success
             continue
 
@@ -301,9 +292,33 @@ def process_song(wav_path, json_path):
     return written
 
 
+def process_song(wav_path, json_path):
+    """Generate args.chunks_per_song chunks from one song. Returns number written."""
+    try:
+        audio, sr = soundfile.read(wav_path, dtype='float32')
+        if audio.ndim == 2:
+            audio = audio.mean(axis=1)
+        if sr != CHUNK_SR:
+            audio = librosa.resample(audio, orig_sr=sr, target_sr=CHUNK_SR)
+        with open(json_path, 'r', encoding='utf8') as f:
+            meta = json.load(f)
+        bar_starts = meta['bar_starts']
+    except Exception as e:
+        print(f'  Load error: {e}')
+        return 0
+
+    stem = Path(wav_path).stem
+    return process_audio(audio, bar_starts, stem,
+                         args.out_path, args.chunks_per_song, args.pitch_range, args.overwrite)
+
+
 # ── main ───────────────────────────────────────────────────────────────────────
 
 def main():
+    global args
+    args = parser.parse_args()
+    os.makedirs(args.out_path, exist_ok=True)
+
     in_path = Path(args.in_path)
     pairs = []
     for wav_file in sorted(in_path.glob('*.wav')):
