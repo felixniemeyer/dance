@@ -592,8 +592,12 @@ def main():
     if args.midi_path is None and args.sf_path is None:
         parser.error('Provide at least one of --midi-path or --sf-path')
 
-    if not args.delete:
+    move_mode = args.move_kept_to is not None
+
+    if not args.delete and not move_mode:
         print("DRY RUN — pass --delete to actually remove files")
+    if move_mode:
+        print(f"MOVE MODE — kept MIDI files will be moved to {args.move_kept_to}")
 
     MAX_FRACTION_DENOMINATOR = args.max_fraction_denominator
     FRACTION_PHASE_TOLERANCE = args.fraction_phase_tolerance
@@ -602,9 +606,12 @@ def main():
     MIN_NOTES_FOR_ALIGNMENT_CHECK = args.min_notes_for_alignment_check
     MIN_NOTES_PER_REGION = args.min_notes_per_region
 
-    use_markers = not args.no_markers
+    # In move-mode we must rescan every file in source and never skip by marker.
+    use_markers = (not args.no_markers) and (not move_mode)
     if use_markers:
         print(f"Markers enabled (version={PRUNE_VERSION}) — already-passed files will be skipped")
+    elif move_mode:
+        print("Markers disabled in move-mode (no file skipping).")
 
     if args.midi_path:
         process_midi(
