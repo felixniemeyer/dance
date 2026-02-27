@@ -21,6 +21,7 @@ import secrets
 from pathlib import Path
 
 import librosa
+import librosa.feature.rhythm   # explicit import needed for lazy-loader in librosa 0.10+
 import numpy as np
 from flask import Flask, abort, jsonify, request, send_file
 
@@ -46,6 +47,14 @@ def _make_parser() -> argparse.ArgumentParser:
 
 AUDIO_EXTENSIONS = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac'}
 HOP_LENGTH = 512
+
+# If the coefficient of variation of inter-beat intervals exceeds this value,
+# the song likely has a structural tempo change and is auto-skipped.
+TEMPO_CV_THRESHOLD = 0.20
+
+
+class TempoChangeError(ValueError):
+    """Raised when a structural tempo change is detected."""
 
 # ── module-level state ────────────────────────────────────────────────────────
 
@@ -75,38 +84,94 @@ def _make_token(filepath: str) -> str:
     return tok
 
 
+def _snap_to_peaks(
+    beat_times:  list[float],
+    onset_env:   np.ndarray,
+    env_times:   np.ndarray,
+    radius_frac: float = 0.30,
+) -> list[float]:
+    """
+    Refine each beat by shifting it to the nearest local onset peak within
+    ±radius_frac × median beat period. Beats with no peak in the window are
+    left unchanged.
+    """
+    if len(beat_times) < 2:
+        return beat_times
+    beat_period = float(np.median(np.diff(beat_times)))
+    radius      = radius_frac * beat_period
+    refined     = []
+    for bt in beat_times:
+        lo = int(np.searchsorted(env_times, bt - radius))
+        hi = int(np.searchsorted(env_times, bt + radius))
+        if lo >= hi:
+            refined.append(bt)
+        else:
+            refined.append(float(env_times[lo + int(np.argmax(onset_env[lo:hi]))]))
+    return refined
+
+
 def _detect_beats(audio: np.ndarray) -> tuple[float, list[float]]:
     """
-    Constant-tempo beat grid aligned to onset peaks (Mixxx-style):
-      1. Estimate a single global BPM.
-      2. Grid-search phase offset to maximise onset energy at beat positions.
-      3. Return an evenly-spaced beat-time array.
-    """
-    onset_env = librosa.onset.onset_strength(
-        y=audio, sr=CHUNK_SR, hop_length=HOP_LENGTH)
+    Three-stage beat detection pipeline:
 
+      1. HPSS — separate the percussive component and compute the onset
+         detection function on it only.  Harmonic content (piano chords,
+         guitar strumming) can drown out kick/snare onsets; removing it first
+         gives a much cleaner ODF.
+
+      2. DP beat tracker (QM-style, same as Mixxx's Queen Mary BeatTracker)
+         anchored to the global BPM prior.  Handles slight live-music tempo
+         drift; CV check auto-skips structural tempo changes.
+
+      3. Beat snapping — shift each DP-predicted beat to the nearest onset
+         peak within ±30 % of the beat period.  This is the biggest quality
+         gain: beats land on actual transients rather than hovering between
+         them.
+    """
+    # ── 1. Percussive separation ───────────────────────────────────────────────
+    _, y_perc = librosa.effects.hpss(audio, margin=3.0)
+
+    # ── 2. Onset detection on percussive signal ───────────────────────────────
+    onset_env = librosa.onset.onset_strength(
+        y=y_perc, sr=CHUNK_SR, hop_length=HOP_LENGTH,
+        aggregate=np.median,   # more robust to transient spikes than mean
+    )
+
+    # ── 3. Global BPM prior ───────────────────────────────────────────────────
     tempo = float(np.atleast_1d(
-        librosa.beat.tempo(onset_envelope=onset_env,
-                           sr=CHUNK_SR, hop_length=HOP_LENGTH)
+        librosa.feature.rhythm.tempo(onset_envelope=onset_env,
+                                     sr=CHUNK_SR, hop_length=HOP_LENGTH)
     )[0])
 
-    fps          = CHUNK_SR / HOP_LENGTH
-    beat_period  = fps * 60.0 / tempo
-    n            = len(onset_env)
-    n_phase      = max(1, int(round(beat_period)))
+    # ── 4. DP beat tracker ────────────────────────────────────────────────────
+    _, beat_frames = librosa.beat.beat_track(
+        onset_envelope=onset_env,
+        sr=CHUNK_SR,
+        hop_length=HOP_LENGTH,
+        start_bpm=tempo,
+        tightness=100,
+        trim=False,
+    )
 
-    best_score, best_phase = -1.0, 0
-    for ph in range(n_phase):
-        idxs  = np.round(np.arange(ph, n, beat_period)).astype(int)
-        idxs  = idxs[idxs < n]
-        score = float(onset_env[idxs].sum())
-        if score > best_score:
-            best_score, best_phase = score, ph
+    beat_times = librosa.frames_to_time(beat_frames, sr=CHUNK_SR, hop_length=HOP_LENGTH)
 
-    frames     = np.round(np.arange(best_phase, n, beat_period)).astype(int)
-    frames     = frames[frames < n]
-    beat_times = librosa.frames_to_time(frames, sr=CHUNK_SR, hop_length=HOP_LENGTH)
-    return tempo, beat_times.tolist()
+    if len(beat_times) < 4:
+        return tempo, beat_times.tolist()
+
+    # ── 5. Structural tempo-change detection ──────────────────────────────────
+    ibi = np.diff(beat_times)
+    cv  = float(ibi.std() / ibi.mean())
+    if cv > TEMPO_CV_THRESHOLD:
+        raise TempoChangeError(
+            f'IBI CV {cv:.2f} > {TEMPO_CV_THRESHOLD} — structural tempo change'
+        )
+
+    # ── 6. Snap beats to nearest onset peak ───────────────────────────────────
+    env_times  = librosa.frames_to_time(
+        np.arange(len(onset_env)), sr=CHUNK_SR, hop_length=HOP_LENGTH)
+    beat_times = _snap_to_peaks(beat_times.tolist(), onset_env, env_times)
+
+    return tempo, beat_times
 
 
 def _compute_bar_starts(beat_times: list, beat_idx: int, bpb: int) -> list[float]:
@@ -135,6 +200,9 @@ def _advance(max_skip: int = 20) -> None:
             continue
         try:
             tempo, beat_times = _detect_beats(audio)
+        except TempoChangeError as exc:
+            print(f'  Skipped (tempo change): {exc}')
+            continue
         except Exception as exc:
             print(f'  Beat detection error: {exc}, skipping…')
             continue

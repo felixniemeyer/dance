@@ -69,9 +69,22 @@ let   rafId     = null
 const barExtents = computed(() => {
   const bt = beatTimes.value, bi = beatIdx.value, n = bpb.value
   if (!bt.length || bi >= bt.length) return [0, 4]
-  const s = bt[bi]
-  // Use tempo-derived duration for exact loop length (beat times have ±1-frame rounding noise)
-  return [s, s + (60 / tempo.value) * n]
+  const s  = bt[bi]
+  const ei = bi + n
+  if (ei < bt.length) {
+    // Use the actual next downbeat — each bar can have a slightly different
+    // duration now that the DP tracker follows real onset positions.
+    return [s, bt[ei]]
+  }
+  // Near end of song: extrapolate using the median of the last few local IBIs
+  // (more accurate than global tempo for tracks with slight drift).
+  const ibis = []
+  for (let i = Math.max(0, bt.length - 9); i < bt.length - 1; i++) {
+    ibis.push(bt[i + 1] - bt[i])
+  }
+  ibis.sort((a, b) => a - b)
+  const localBeat = ibis[Math.floor(ibis.length / 2)] ?? (60 / tempo.value)
+  return [s, s + localBeat * n]
 })
 
 const statusFile = computed(() => {
@@ -243,12 +256,12 @@ function draw() {
 // ── View management ───────────────────────────────────────────────────────────
 
 function scrollToBar() {
-  const bt = beatTimes.value, bi = beatIdx.value, n = bpb.value
+  const bt = beatTimes.value, bi = beatIdx.value
   if (!bt.length || bi >= bt.length) return
-  const barDur  = (60 / tempo.value) * n
-  const barMid  = bt[bi] + barDur / 2
+  const [barS, barE] = barExtents.value
+  const barDur  = barE - barS          // actual duration of this specific bar
+  const barMid  = barS + barDur / 2
   const viewDur = barDur * 16
-  // Center the selected bar; allow vs to go negative (shows void on left edge)
   viewStart.value = barMid - viewDur / 2
   viewEnd.value   = barMid + viewDur / 2
 }
