@@ -11,7 +11,11 @@
       </RouterLink>
     </nav>
     <div class="view">
-      <RouterView />
+      <RouterView v-slot="{ Component }">
+        <KeepAlive>
+          <component :is="Component" />
+        </KeepAlive>
+      </RouterView>
     </div>
   </div>
 </template>

@@ -87,7 +87,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, onActivated } from 'vue'
 import { computePeaks } from '../utils/audio.js'
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -173,14 +173,20 @@ async function loadCatalogue() {
       apiFetch('/test-files'),
       apiFetch('/checkpoints'),
     ])
-    chunks.value    = c.chunks    ?? []
-    testFiles.value = t.files     ?? []
-    tags.value      = cp.tags     ?? []
-    allEpochs.value = cp.epochs   ?? {}
-    selectedTag.value   = tags.value[0]    ?? ''
-    selectedFile.value  = fileList.value[0] ?? ''
+    chunks.value    = c.chunks  ?? []
+    testFiles.value = t.files   ?? []
+    tags.value      = cp.tags   ?? []
+    allEpochs.value = cp.epochs ?? {}
+
+    // Only set defaults if current selection is missing or empty
+    if (!selectedTag.value || !tags.value.includes(selectedTag.value))
+      selectedTag.value = tags.value[0] ?? ''
+
+    const list = fileList.value
+    if (!selectedFile.value || !list.includes(selectedFile.value))
+      selectedFile.value = list[0] ?? ''
   } catch (e) {
-    statusMsg.value = `Backend error: ${e.message}`
+    statusMsg.value  = `Inspector backend offline`
     inferError.value = true
   }
 }
@@ -491,6 +497,10 @@ onMounted(async () => {
   if (phaseCanvas.value) ro.observe(phaseCanvas.value.parentElement)
   drawAll()
 })
+
+// Refresh catalogue every time the Inspect tab is re-activated (KeepAlive).
+// Backend re-scans the directory on each request so new chunks are picked up.
+onActivated(() => loadCatalogue())
 
 onUnmounted(() => {
   stopAudio()

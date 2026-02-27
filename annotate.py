@@ -459,13 +459,14 @@ def main():
         if len(parts) == 2:
             done_stems.add(parts[0])
 
-    # Collect audio files
+    # Collect audio files — single os.walk pass instead of one rglob per extension
     music_path = Path(_args.music_path)
+    _exts = {e.lower() for e in AUDIO_EXTENSIONS}
     all_files: list[Path] = []
-    for ext in AUDIO_EXTENSIONS:
-        all_files.extend(music_path.rglob(f'*{ext}'))
-        all_files.extend(music_path.rglob(f'*{ext.upper()}'))
-    all_files = list({f.resolve() for f in all_files})
+    for dirpath, _, filenames in os.walk(music_path):
+        for fn in filenames:
+            if Path(fn).suffix.lower() in _exts:
+                all_files.append(Path(dirpath) / fn)
     random.shuffle(all_files)
     _files[:] = [str(f) for f in all_files if f.stem not in done_stems]
 

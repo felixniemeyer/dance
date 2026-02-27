@@ -41,7 +41,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, onActivated, onDeactivated, watch } from 'vue'
 import { computePeaks as _computePeaks } from '../utils/audio.js'
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -775,6 +775,12 @@ onMounted(async () => {
     draw()
   }
 })
+
+// With <KeepAlive> the component stays alive when switching tabs.
+// Re-attach the keyboard listener when the tab becomes visible again,
+// and detach it when hidden so keys on the Inspect tab don't trigger actions.
+onActivated(()   => window.addEventListener('keydown', onKeyDown))
+onDeactivated(() => window.removeEventListener('keydown', onKeyDown))
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeyDown)
