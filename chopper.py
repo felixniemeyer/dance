@@ -306,6 +306,114 @@ def process_audio(audio, bar_starts, stem, out_path, n_chunks, pitch_range=2.0, 
     return written
 
 
+def process_audio_segmented(audio, segments, stem, out_path, n_chunks,
+                            pitch_range=2.0, overwrite=False):
+    """
+    Generate chunks from a list of annotated segments.
+
+    segments : list of {start, end, bar_starts, status}
+               as sent by the frontend save payload.
+               Only 'accepted' segments contribute audio; a 'skipped' segment
+               breaks contiguity between accepted ones.
+
+    Chunks are drawn only from contiguous accepted runs.  n_chunks is
+    distributed across runs proportionally to their duration (≥1 attempt per
+    run if budget allows).
+    """
+    song_dur = len(audio) / CHUNK_SR
+
+    # Sort by start time so we can detect contiguous runs in order
+    sorted_segs = sorted(segments, key=lambda s: s['start'])
+
+    # Build contiguous accepted runs: a 'skipped' segment acts as a barrier
+    runs: list[list[dict]] = []
+    current_run: list[dict] = []
+    for seg in sorted_segs:
+        status = seg.get('status', 'pending')
+        if status == 'accepted':
+            current_run.append(seg)
+        elif status == 'skipped':
+            if current_run:
+                runs.append(current_run)
+            current_run = []
+        # 'pending' segments are treated as accepted gaps — keep current run open
+        # (shouldn't happen at save time, but be defensive)
+    if current_run:
+        runs.append(current_run)
+
+    if not runs:
+        print('  No accepted segments — nothing written')
+        return 0
+
+    os.makedirs(out_path, exist_ok=True)
+
+    # Proportional chunk budget (at least 1 attempt per run)
+    run_durs   = [sum(s['end'] - s['start'] for s in run) for run in runs]
+    total_dur  = sum(run_durs) or 1.0
+    run_budget = []
+    remaining  = n_chunks
+    for i, dur in enumerate(run_durs):
+        if i == len(run_durs) - 1:
+            run_budget.append(max(1, remaining))
+        else:
+            alloc = max(1, round(n_chunks * dur / total_dur))
+            run_budget.append(alloc)
+            remaining -= alloc
+
+    written   = 0
+    chunk_ctr = 0
+
+    for run, n_run in zip(runs, run_budget):
+        run_start = run[0]['start']
+        run_end   = run[-1]['end']
+        run_dur   = run_end - run_start
+
+        if run_dur < chunk_duration + 2:
+            print(f'  Run [{run_start:.1f}–{run_end:.1f}s] too short, skipping')
+            continue
+
+        # Collect all bar_starts for this run (augmentation modes may look
+        # slightly beyond the chunk window, so pass the full run's bars)
+        run_bar_starts = sorted(
+            b for seg in run for b in seg.get('bar_starts', [])
+        )
+
+        for _ in range(n_run):
+            max_start = max(run_start, run_end - chunk_duration * 2.5)
+            start_s   = random.uniform(run_start, max_start)
+
+            n_semitones = random.uniform(-pitch_range, pitch_range)
+            chunk_audio, rel_bars = _make_chunk(
+                audio, run_bar_starts, start_s, n_semitones)
+            if chunk_audio is None:
+                continue
+
+            peak = np.abs(chunk_audio).max()
+            if peak > 0:
+                chunk_audio = chunk_audio / peak
+
+            out_stem = os.path.join(out_path, f'{stem}__{chunk_ctr:03d}')
+            chunk_ctr += 1
+
+            if not overwrite and os.path.exists(out_stem + '.ogg'):
+                written += 1
+                continue
+
+            with open(out_stem + '.bars', 'w', encoding='utf8') as f:
+                for b in rel_bars:
+                    f.write(f'{b:.6f}\n')
+
+            if not _write_ogg(chunk_audio, out_stem + '.ogg'):
+                print(f'  ffmpeg failed for chunk {chunk_ctr}')
+                if os.path.exists(out_stem + '.bars'):
+                    os.remove(out_stem + '.bars')
+                continue
+
+            written += 1
+
+    return written
+
+
 def process_song(wav_path, json_path):
     """Generate args.chunks_per_song chunks from one song. Returns number written."""
     try:

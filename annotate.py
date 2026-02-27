@@ -28,7 +28,7 @@ import librosa.feature.rhythm   # explicit import needed for lazy-loader in libr
 import numpy as np
 from flask import Flask, abort, jsonify, request, send_file
 
-from chopper import process_audio
+from chopper import process_audio_segmented
 from config import samplerate as CHUNK_SR
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -50,19 +50,6 @@ def _make_parser() -> argparse.ArgumentParser:
 
 AUDIO_EXTENSIONS = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac'}
 HOP_LENGTH = 512
-
-# Beat detection runs only on this many seconds of audio.
-# HPSS cost is linear in length; 90 s is enough for a solid tempo estimate
-# and reduces analysis time ~3× for a typical 4-minute track.
-BEAT_DETECT_SECS = 90
-
-# If the coefficient of variation of inter-beat intervals exceeds this value,
-# the song likely has a structural tempo change and is auto-skipped.
-TEMPO_CV_THRESHOLD = 0.20
-
-
-class TempoChangeError(ValueError):
-    """Raised when a structural tempo change is detected."""
 
 
 # ── module-level state ────────────────────────────────────────────────────────
@@ -89,6 +76,20 @@ def _make_token(filepath: str) -> str:
     _token_to_file.clear()
     _token_to_file[tok] = filepath
     return tok
+
+
+def _load_audio_ffmpeg(filepath: str, sr: int) -> np.ndarray:
+    """Decode any audio format via ffmpeg → mono float32 PCM at sr Hz."""
+    cmd = [
+        'ffmpeg', '-v', 'error',
+        '-i', filepath,
+        '-f', 'f32le', '-ac', '1', '-ar', str(sr),
+        'pipe:1',
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        raise RuntimeError(f'ffmpeg failed: {result.stderr.decode()[:300]}')
+    return np.frombuffer(result.stdout, dtype=np.float32).copy()
 
 
 def _regularize_beats(beat_times: list[float], smooth_beats: int = 8) -> list[float]:
@@ -118,21 +119,26 @@ def _regularize_beats(beat_times: list[float], smooth_beats: int = 8) -> list[fl
     return out.tolist()
 
 
-def _detect_beats(audio: np.ndarray) -> tuple[float, list[float]]:
+def _split_into_segments(beat_times: np.ndarray) -> list[tuple[int, int]]:
     """
-    Three-stage beat detection pipeline:
+    Split beat_times into tempo-coherent segments, returning (start_idx, end_idx) pairs.
 
-      1. HPSS — separate the percussive component and compute the onset
-         detection function on it only.  Harmonic content (piano chords,
-         guitar strumming) can drown out kick/snare onsets; removing it first
-         gives a much cleaner ODF.
+    TODO: replace with madmom + proper top-down segmentation (moving-average MSD).
+    Currently returns a single segment covering the whole track.
+    """
+    return [(0, len(beat_times))]
 
-      2. DP beat tracker (QM-style, same as Mixxx's Queen Mary BeatTracker)
-         anchored to the global BPM prior.  Handles slight live-music tempo
-         drift; CV check auto-skips structural tempo changes.
 
-      3. IBI smoothing — running median over ±4 beats removes high-frequency
-         jitter while allowing slow tempo drift (live music without metronome).
+def _detect_beats(audio: np.ndarray) -> list[dict]:
+    """
+    Beat detection returning a list of tempo-coherent segment dicts.
+
+    Each dict: {start_time, end_time, beat_times, tempo}
+
+      1. HPSS — isolate the percussive component for a cleaner ODF.
+      2. DP beat tracker anchored to the global BPM prior.
+      3. _split_into_segments — changepoint detection (currently stub).
+      4. _regularize_beats applied independently per segment.
     """
     # ── 1. Percussive separation ───────────────────────────────────────────────
     _, y_perc = librosa.effects.hpss(audio, margin=3.0)
@@ -140,11 +146,11 @@ def _detect_beats(audio: np.ndarray) -> tuple[float, list[float]]:
     # ── 2. Onset detection on percussive signal ───────────────────────────────
     onset_env = librosa.onset.onset_strength(
         y=y_perc, sr=CHUNK_SR, hop_length=HOP_LENGTH,
-        aggregate=np.median,   # more robust to transient spikes than mean
+        aggregate=np.median,
     )
 
     # ── 3. Global BPM prior ───────────────────────────────────────────────────
-    tempo = float(np.atleast_1d(
+    tempo_global = float(np.atleast_1d(
         librosa.feature.rhythm.tempo(onset_envelope=onset_env,
                                      sr=CHUNK_SR, hop_length=HOP_LENGTH)
     )[0])
@@ -154,7 +160,7 @@ def _detect_beats(audio: np.ndarray) -> tuple[float, list[float]]:
         onset_envelope=onset_env,
         sr=CHUNK_SR,
         hop_length=HOP_LENGTH,
-        start_bpm=tempo,
+        start_bpm=tempo_global,
         tightness=100,
         trim=False,
     )
@@ -162,20 +168,26 @@ def _detect_beats(audio: np.ndarray) -> tuple[float, list[float]]:
     beat_times = librosa.frames_to_time(beat_frames, sr=CHUNK_SR, hop_length=HOP_LENGTH)
 
     if len(beat_times) < 4:
-        return tempo, beat_times.tolist()
+        return []
 
-    # ── 5. Structural tempo-change detection ──────────────────────────────────
-    ibi = np.diff(beat_times)
-    cv  = float(ibi.std() / ibi.mean())
-    if cv > TEMPO_CV_THRESHOLD:
-        raise TempoChangeError(
-            f'IBI CV {cv:.2f} > {TEMPO_CV_THRESHOLD} — structural tempo change'
-        )
+    # ── 5. Segment detection + per-segment regularisation ─────────────────────
+    seg_slices = _split_into_segments(beat_times)
+    segments: list[dict] = []
+    for si, ei in seg_slices:
+        seg_beats = beat_times[si:ei]
+        if len(seg_beats) < 4:
+            continue
+        smoothed  = _regularize_beats(seg_beats.tolist())
+        ibis      = np.diff(smoothed)
+        seg_tempo = float(60.0 / np.median(ibis)) if len(ibis) else tempo_global
+        segments.append({
+            'start_time': float(seg_beats[0]),
+            'end_time':   float(seg_beats[-1]),
+            'beat_times': smoothed,
+            'tempo':      seg_tempo,
+        })
 
-    # ── 6. Smooth IBI sequence to remove jitter, preserve slow drift ──────────
-    beat_times = _regularize_beats(beat_times.tolist())
-
-    return tempo, beat_times
+    return segments
 
 
 def _load_song_data(filepath: str) -> dict | None:
@@ -191,22 +203,18 @@ def _load_song_data(filepath: str) -> dict | None:
         print(f'  Load error ({name}): {exc}')
         return None
     try:
-        tempo, beat_times = _detect_beats(audio)
-    except TempoChangeError as exc:
-        print(f'  Skipped ({name}): {exc}')
-        return None
+        segments = _detect_beats(audio)
     except Exception as exc:
         print(f'  Beat detection error ({name}): {exc}')
         return None
-    if not beat_times:
+    if not segments:
         print(f'  No beats detected ({name}), skipping')
         return None
     return {
-        '_filepath':  filepath,
-        '_audio':     audio,
-        'filename':   name,
-        'beat_times': beat_times,
-        'tempo':      tempo,
+        '_filepath': filepath,
+        '_audio':    audio,
+        'filename':  name,
+        'segments':  segments,
     }
 
 
@@ -286,19 +294,20 @@ def _advance(max_skip: int = 20) -> None:
         if data is None:
             continue   # file failed analysis — try the next one
 
-        print(f'  {data["tempo"]:.1f} BPM  {len(data["beat_times"])} beats')
+        n_segs      = len(data['segments'])
+        total_beats = sum(len(s['beat_times']) for s in data['segments'])
+        print(f'  {n_segs} segment(s)  {total_beats} beats')
 
         # ── Activate current song ─────────────────────────────────────────────
         _current_audio = data['_audio']
         token = _make_token(filepath)
         _state = {
-            'done':       False,
-            '_filepath':  filepath,
-            'token':      token,
-            'filename':   name,
-            'beat_times': data['beat_times'],
-            'tempo':      data['tempo'],
-            'remaining':  len(_files),
+            'done':      False,
+            '_filepath': filepath,
+            'token':     token,
+            'filename':  name,
+            'segments':  [{'id': i, **seg} for i, seg in enumerate(data['segments'])],
+            'remaining': len(_files),
         }
 
         # ── Kick off preload for the next queued file ─────────────────────────
@@ -316,13 +325,12 @@ def _public_state() -> dict:
     with _preload_lock:
         preloading = _preload_thread is not None and _preload_thread.is_alive()
     return {
-        'done':        False,
-        'token':       _state['token'],
-        'filename':    _state['filename'],
-        'beat_times':  _state['beat_times'],
-        'tempo':       _state['tempo'],
-        'remaining':   _state['remaining'],
-        'preloading':  preloading,
+        'done':       False,
+        'token':      _state['token'],
+        'filename':   _state['filename'],
+        'segments':   _state['segments'],
+        'remaining':  _state['remaining'],
+        'preloading': preloading,
     }
 
 
@@ -353,12 +361,12 @@ def api_action():
 
     if act == 'save' and not _state.get('done'):
         if _current_audio is not None:
-            bar_starts = [float(t) for t in data.get('bar_starts', [])]
-            if not bar_starts:
-                return jsonify({'error': 'bar_starts missing'}), 400
+            payload_segs = data.get('segments', [])
+            if not payload_segs:
+                return jsonify({'error': 'segments missing'}), 400
             stem = Path(_state['_filepath']).stem
-            n = process_audio(
-                _current_audio, bar_starts, stem,
+            n = process_audio_segmented(
+                _current_audio, payload_segs, stem,
                 str(_out_path), _args.chunks_per_song, _args.pitch_range,
                 overwrite=False,
             )

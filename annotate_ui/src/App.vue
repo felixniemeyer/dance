@@ -12,6 +12,7 @@
         <span class="filename">{{ currentFile }}</span>
         <span class="meta">
           &nbsp;|&nbsp; {{ tempo.toFixed(1) }} BPM
+          &nbsp;|&nbsp; seg {{ currentSegmentIdx + 1 }}/{{ segments.length }}
           &nbsp;|&nbsp; {{ remaining }} remaining
           <span v-if="preloadingNext" class="badge badge-preload" title="next song is being analysed">⟳ next</span>
         </span>
@@ -27,12 +28,15 @@
           <span class="ts-den">{{ bpd }}</span>
         </span>
         <span v-if="subdivision > 1" class="badge badge-subdiv">×{{ subdivision }}</span>
+        <span class="seg-status" :class="`seg-${currentSegment?.status ?? 'pending'}`">
+          {{ currentSegment?.status ?? 'pending' }}
+        </span>
         <span class="status-info">{{ statusInfo }}</span>
         <span v-if="digitBuf" class="badge badge-typing">{{ digitBuf }}…</span>
       </template>
     </div>
 
-    <pre class="help">h/l ±sub-beat · j/k ±bar · s/d subdivide · 0-9 bpb · Shift+0-9 note · Space loop · Enter save+next · Esc skip</pre>
+    <pre class="help">h/l ±sub-beat · j/k ±bar · s/d subdivide · 0-9 bpb · Shift+0-9 note · Space loop · c cut · x skip · Enter accept · Esc skip song</pre>
   </div>
 </template>
 
@@ -52,15 +56,19 @@ const serverDone     = ref(false)
 const serverError    = ref(false)
 const currentFile    = ref('')
 const remaining      = ref(0)
-const beatTimes      = ref([])
-const tempo          = ref(120)
 const loading        = ref(false)
 const preloadingNext = ref(false)
+
+// ── Segment state ─────────────────────────────────────────────────────────────
+// Each segment: {id, startTime, endTime, beat_times, tempo, status, bpb}
+// status: 'pending' | 'accepted' | 'skipped'
+
+const segments = ref([])
 
 // ── Local annotation state ────────────────────────────────────────────────────
 
 const beatIdx    = ref(0)   // index into subdividedBeats
-const bpb        = ref(4)   // beats per bar (musical, before subdivision)
+const bpb        = ref(4)   // beats per bar for current segment
 const bpd        = ref(4)   // note value denominator (display only)
 const subdivision = ref(1)  // sub-beat grid: 1=off, 2=halves, 3=triplets, …
 const digitBuf   = ref('')
@@ -88,11 +96,20 @@ const viewEnd   = ref(30)
 const canvasEl  = ref(null)
 let   rafId     = null
 
+// ── Derived: flat beat list across all segments ───────────────────────────────
+
+const allBeats = computed(() => {
+  const out = []
+  for (const seg of segments.value) {
+    for (const t of seg.beat_times) out.push(t)
+  }
+  return out.sort((a, b) => a - b)
+})
+
 // ── Derived beat grid ─────────────────────────────────────────────────────────
 
-// Full grid with sub-beats interpolated between real detected beats.
 const subdividedBeats = computed(() => {
-  const bt = beatTimes.value, k = subdivision.value
+  const bt = allBeats.value, k = subdivision.value
   if (k <= 1 || bt.length < 2) return bt
   const out = []
   for (let i = 0; i < bt.length - 1; i++) {
@@ -106,12 +123,49 @@ const subdividedBeats = computed(() => {
 // Effective beats-per-bar in the sub-beat grid (= musical bpb × subdivision)
 const effectiveBpb = computed(() => bpb.value * subdivision.value)
 
-// ── Computed bar extents (respects actual beat positions + subdivision) ────────
+// ── Derived: which segment contains the current beat cursor ──────────────────
+
+const currentSegmentIdx = computed(() => {
+  const sb   = subdividedBeats.value
+  const bi   = beatIdx.value
+  const segs = segments.value
+  if (!sb.length || !segs.length) return 0
+  const t = sb[Math.max(0, Math.min(bi, sb.length - 1))]
+  for (let i = 0; i < segs.length; i++) {
+    if (t >= segs[i].startTime && t <= segs[i].endTime) return i
+  }
+  // Fallback: find nearest segment by midpoint
+  let best = 0, bestD = Infinity
+  for (let i = 0; i < segs.length; i++) {
+    const mid = (segs[i].startTime + segs[i].endTime) / 2
+    const d   = Math.abs(t - mid)
+    if (d < bestD) { bestD = d; best = i }
+  }
+  return best
+})
+
+const currentSegment = computed(() => segments.value[currentSegmentIdx.value] ?? null)
+
+// Current segment's tempo (for display + IBI fallback)
+const tempo = computed(() => currentSegment.value?.tempo ?? 120)
+
+// ── Sync bpb ↔ current segment ────────────────────────────────────────────────
+
+watch(currentSegmentIdx, (idx) => {
+  const seg = segments.value[idx]
+  if (seg && seg.bpb !== bpb.value) bpb.value = seg.bpb
+})
+
+watch(bpb, (val) => {
+  const seg = segments.value[currentSegmentIdx.value]
+  if (seg) seg.bpb = val
+})
+
+// ── Computed bar extents ──────────────────────────────────────────────────────
 
 const barExtents = computed(() => {
   const sb = subdividedBeats.value, bi = beatIdx.value, n = effectiveBpb.value
   if (!sb.length) return [0, 4]
-  // Local sub-beat interval for extrapolation beyond array bounds
   const ibis = []
   for (let i = Math.max(0, sb.length - 9); i < sb.length - 1; i++) ibis.push(sb[i + 1] - sb[i])
   ibis.sort((a, b) => a - b)
@@ -228,22 +282,18 @@ function draw() {
     const isBarStart = ((i - bi) % effN + effN) % effN === 0
 
     if (i === bi) {
-      // Current downbeat — always full height, red
       ctx.strokeStyle = 'rgba(255,80,80,0.95)'; ctx.lineWidth = 2
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAIN); ctx.stroke()
     } else if (isBarStart) {
-      // Other bar starts: full height if real beat, half height if sub-beat
       ctx.strokeStyle = isRealBeat ? 'rgba(255,220,80,0.75)' : 'rgba(255,200,60,0.45)'
       ctx.lineWidth   = 1
       const top = isRealBeat ? 0 : MAIN * 0.25
       const bot = isRealBeat ? MAIN : MAIN * 0.75
       ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bot); ctx.stroke()
     } else if (isRealBeat) {
-      // Plain beat, not a bar start
       ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1
       ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAIN); ctx.stroke()
     } else {
-      // Pure sub-beat marker — short tick in the middle
       ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1
       ctx.beginPath(); ctx.moveTo(x, MAIN * 0.35); ctx.lineTo(x, MAIN * 0.65); ctx.stroke()
     }
@@ -284,6 +334,28 @@ function draw() {
     ctx.fillRect(px, MY + MINI / 2 - h, 1, h * 2)
   }
 
+  // ── Segment overlays in minimap ────────────────────────────────────────────
+  for (const seg of segments.value) {
+    const sx0 = (seg.startTime / total) * W
+    const sx1 = (seg.endTime   / total) * W
+    const sw  = Math.max(1, sx1 - sx0)
+    if (seg.status === 'accepted') {
+      ctx.fillStyle   = 'rgba(0,200,80,0.12)'
+      ctx.fillRect(sx0, MY, sw, MINI)
+      ctx.strokeStyle = 'rgba(0,200,80,0.5)'; ctx.lineWidth = 1
+      ctx.strokeRect(sx0 + 0.5, MY + 0.5, sw - 1, MINI - 1)
+    } else if (seg.status === 'skipped') {
+      ctx.fillStyle   = 'rgba(255,60,60,0.30)'
+      ctx.fillRect(sx0, MY, sw, MINI)
+      ctx.strokeStyle = 'rgba(255,80,80,0.6)'; ctx.lineWidth = 1
+      ctx.strokeRect(sx0 + 0.5, MY + 0.5, sw - 1, MINI - 1)
+    } else {
+      // pending — subtle outline only
+      ctx.strokeStyle = 'rgba(255,255,255,0.20)'; ctx.lineWidth = 1
+      ctx.strokeRect(sx0 + 0.5, MY + 0.5, sw - 1, MINI - 1)
+    }
+  }
+
   // Bar markers in minimap (globally, using full grid from first bar)
   const firstBarI = ((bi % effN) + effN) % effN
   for (let i = firstBarI; i < sb.length; i += effN) {
@@ -310,7 +382,6 @@ function scrollToBar() {
   const [barS, barE] = barExtents.value
   const barDur  = barE - barS
   const barMid  = barS + barDur / 2
-  // Scale view so the current bar always occupies BAR_FRAC of the canvas width
   const viewDur = barDur / BAR_FRAC
   viewStart.value = barMid - viewDur / 2
   viewEnd.value   = barMid + viewDur / 2
@@ -382,6 +453,52 @@ async function loadAudio(token) {
   draw()
 }
 
+// ── Bar start computation ─────────────────────────────────────────────────────
+
+/**
+ * Compute bar starts for a single segment.
+ *
+ * If beatIdx is within the segment, the global bi alignment determines which
+ * beats are bar starts (respecting the segment's own bpb).
+ * Otherwise, we default to the segment's first beat as bar 1.
+ */
+function computeBarStartsFor(seg) {
+  const sb   = subdividedBeats.value
+  const bi   = beatIdx.value
+  const k    = subdivision.value
+  const effN = seg.bpb * k
+
+  // Filter subdivided beats to those within this segment
+  const segIdxs  = []
+  const segTimes = []
+  for (let i = 0; i < sb.length; i++) {
+    if (sb[i] >= seg.startTime && sb[i] <= seg.endTime) {
+      segIdxs.push(i)
+      segTimes.push(sb[i])
+    }
+  }
+  if (!segTimes.length) return []
+
+  const biInSeg = bi >= segIdxs[0] && bi <= segIdxs[segIdxs.length - 1]
+  const barStarts = []
+
+  if (biInSeg) {
+    // Align to bi: bar starts are beats where (globalIdx - bi) % effN === 0
+    for (let j = 0; j < segIdxs.length; j++) {
+      if (((segIdxs[j] - bi) % effN + effN) % effN === 0) {
+        barStarts.push(segTimes[j])
+      }
+    }
+  } else {
+    // Default: first beat of segment is bar 1
+    for (let j = 0; j < segTimes.length; j += effN) {
+      barStarts.push(segTimes[j])
+    }
+  }
+
+  return barStarts.length >= 2 ? barStarts : []
+}
+
 // ── State management ──────────────────────────────────────────────────────────
 
 function applyState(state) {
@@ -389,11 +506,20 @@ function applyState(state) {
   serverDone.value     = false
   currentFile.value    = state.filename    || ''
   remaining.value      = state.remaining   || 0
-  beatTimes.value      = state.beat_times  || []
-  tempo.value          = state.tempo       || 120
   preloadingNext.value = state.preloading  || false
-  beatIdx.value     = 0; bpb.value = 4; bpd.value = 4; subdivision.value = 1
-  digitBuf.value    = ''; clearTimeout(digitTimer); digitTimer = null
+
+  segments.value = (state.segments || []).map(s => ({
+    id:        s.id,
+    startTime: s.start_time,
+    endTime:   s.end_time,
+    beat_times: s.beat_times,
+    tempo:     s.tempo,
+    status:    'pending',
+    bpb:       4,
+  }))
+
+  beatIdx.value = 0; bpb.value = 4; bpd.value = 4; subdivision.value = 1
+  digitBuf.value = ''; clearTimeout(digitTimer); digitTimer = null
   scrollToBar()
   loadAudio(state.token)
 }
@@ -424,11 +550,9 @@ async function apiAction(type, extra = {}) {
 function setSubdivision(newK) {
   newK = Math.max(1, Math.min(MAX_SUBDIV, newK))
   if (newK === subdivision.value) return
-  // Remember current time position before the grid changes
   const currentTime = subdividedBeats.value[beatIdx.value] ?? 0
   subdivision.value = newK
-  // Find nearest index in new subdivided grid
-  const newSB = subdividedBeats.value  // recomputed synchronously
+  const newSB = subdividedBeats.value
   let best = 0, bestDist = Infinity
   for (let i = 0; i < newSB.length; i++) {
     const d = Math.abs(newSB[i] - currentTime)
@@ -452,6 +576,35 @@ function commitDigit() {
   if (n > 0) { bpb.value = n; scrollToBar(); updateLoop() }
   digitBuf.value = ''
   draw()
+}
+
+// ── Save trigger ──────────────────────────────────────────────────────────────
+
+function fireSave() {
+  const segsPayload = segments.value.map(s => ({
+    start:      s.startTime,
+    end:        s.endTime,
+    bar_starts: computeBarStartsFor(s),
+    status:     s.status,
+  }))
+  apiAction('save', { segments: segsPayload })
+}
+
+// Scroll to first beat of the next pending segment (returns true if found)
+function goToNextPending() {
+  const nextPending = segments.value.find(s => s.status === 'pending')
+  if (!nextPending) return false
+  const firstBeat = nextPending.beat_times[0]
+  if (firstBeat === undefined) return false
+  const sb = subdividedBeats.value
+  let best = 0, bestDist = Infinity
+  for (let i = 0; i < sb.length; i++) {
+    const d = Math.abs(sb[i] - firstBeat)
+    if (d < bestDist) { bestDist = d; best = i }
+  }
+  beatIdx.value = best
+  scrollToBar()
+  return true
 }
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────
@@ -482,7 +635,7 @@ function onKeyDown(e) {
 
   } else if (e.key === 'k') {
     e.preventDefault()
-    if (beatIdx.value > 0) beatIdx.value -= effN   // allow one step into negative
+    if (beatIdx.value > 0) beatIdx.value -= effN
     scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 's') {
@@ -497,24 +650,51 @@ function onKeyDown(e) {
     e.preventDefault()
     togglePlay()
 
+  } else if (e.key === 'c') {
+    // Cut current segment at the current beat position
+    e.preventDefault()
+    const idx = currentSegmentIdx.value
+    const seg = segments.value[idx]
+    if (!seg || beatIdx.value >= sb.length) return
+    const cutTime = sb[beatIdx.value]
+    if (cutTime <= seg.startTime || cutTime >= seg.endTime) return
+
+    const beforeBeats = seg.beat_times.filter(t => t < cutTime)
+    const afterBeats  = seg.beat_times.filter(t => t >= cutTime)
+    if (beforeBeats.length < 4 || afterBeats.length < 4) return   // too short
+
+    const leftSeg  = { ...seg, endTime:   cutTime, beat_times: beforeBeats, status: 'pending', bpb: bpb.value }
+    const rightSeg = { ...seg, startTime: cutTime, beat_times: afterBeats,  status: 'pending', bpb: bpb.value }
+
+    const newSegs = [...segments.value]
+    newSegs.splice(idx, 1, leftSeg, rightSeg)
+    newSegs.forEach((s, i) => { s.id = i })
+    segments.value = newSegs
+    draw()
+
+  } else if (e.key === 'x') {
+    // Toggle current segment: pending→skipped, skipped→pending, accepted→skipped
+    e.preventDefault()
+    const seg = segments.value[currentSegmentIdx.value]
+    if (!seg) return
+    const transitions = { pending: 'skipped', skipped: 'pending', accepted: 'skipped' }
+    seg.status = transitions[seg.status] ?? 'skipped'
+    draw()
+
   } else if (e.key === 'Enter') {
     e.preventDefault()
     commitDigit()
-    const bi = beatIdx.value
-    // Local sub-beat interval for extrapolating bars before sb[0]
-    const ibis = []
-    for (let i = Math.max(0, sb.length - 9); i < sb.length - 1; i++) ibis.push(sb[i + 1] - sb[i])
-    ibis.sort((a, b) => a - b)
-    const lbi = ibis[Math.floor(ibis.length / 2)] ?? (60 / tempo.value / subdivision.value)
-    const getT = i => i >= 0 && i < sb.length ? sb[i] : i < 0 ? sb[0] + i * lbi : sb[sb.length - 1] + (i - sb.length + 1) * lbi
-    // JS % can be negative, so force into [0, effN)
-    const firstI = ((bi % effN) + effN) % effN
-    const barStarts = []
-    // Extrapolated bars before sb[0] (when bi < 0)
-    for (let i = bi; i < firstI; i += effN) barStarts.push(getT(i))
-    // Detected bars
-    for (let i = firstI; i < sb.length; i += effN) barStarts.push(sb[i])
-    apiAction('save', { bar_starts: barStarts })
+
+    const idx = currentSegmentIdx.value
+    const seg = segments.value[idx]
+    if (seg) seg.status = 'accepted'
+
+    if (segments.value.every(s => s.status !== 'pending')) {
+      fireSave()
+    } else {
+      goToNextPending()
+      draw()
+    }
 
   } else if (e.key === 'Escape') {
     e.preventDefault()
@@ -638,6 +818,20 @@ canvas.waveform {
 }
 
 .status-info { color: #ccc }
+
+/* ── Segment status pill ────────────────────────────────────────────────────── */
+
+.seg-status {
+  font-size: 0.8rem;
+  padding: 1px 7px;
+  border-radius: 3px;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.seg-pending  { color: #888;    background: rgba(255,255,255,0.08) }
+.seg-accepted { color: #00e676; background: rgba(0,200,80,0.15)    }
+.seg-skipped  { color: #ff5252; background: rgba(255,60,60,0.15)   }
 
 /* ── Time signature ─────────────────────────────────────────────────────────── */
 
