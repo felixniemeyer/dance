@@ -44,7 +44,9 @@ let   digitTimer = null
 
 let audioCtx      = null    // AudioContext (lazy-created on first gesture)
 let decodedBuffer = null    // AudioBuffer from decodeAudioData
-let peaks         = null    // Float32Array, PPS samples/sec
+let peaks         = null    // Float32Array, ~PPS samples/sec
+let peakStep      = 0       // actual samples per peak bucket
+let peakSR        = 1       // sampleRate of the decoded buffer
 let source        = null    // current AudioBufferSourceNode
 
 // Playback tracking (needed for animated playhead)
@@ -67,9 +69,9 @@ let   rafId     = null
 const barExtents = computed(() => {
   const bt = beatTimes.value, bi = beatIdx.value, n = bpb.value
   if (!bt.length || bi >= bt.length) return [0, 4]
-  const s  = bt[bi]
-  const ei = bi + n
-  return [s, ei < bt.length ? bt[ei] : s + (60 / tempo.value) * n]
+  const s = bt[bi]
+  // Use tempo-derived duration for exact loop length (beat times have ±1-frame rounding noise)
+  return [s, s + (60 / tempo.value) * n]
 })
 
 const statusFile = computed(() => {
@@ -95,6 +97,8 @@ const statusLive = computed(() => {
 function computePeaks(ab) {
   const data = ab.getChannelData(0)
   const step = Math.round(ab.sampleRate / PPS)
+  peakStep   = step
+  peakSR     = ab.sampleRate
   const out  = new Float32Array(Math.ceil(data.length / step))
   for (let i = 0; i < out.length; i++) {
     const s = i * step, e = Math.min(s + step, data.length)
@@ -149,16 +153,15 @@ function draw() {
   ctx.fillRect(bx0, 0, bx1 - bx0, MAIN)
 
   // ── Waveform ──────────────────────────────────────────────────────────────
-  const pi0 = Math.max(0, Math.floor(vs * PPS))
-  const pi1 = Math.min(peaks.length, Math.ceil(ve * PPS))
-  const nP  = pi1 - pi0
-
+  // Map screen pixel → time → peak index. Pixels outside [0, duration] are void.
   ctx.fillStyle = '#3a8aef'
   for (let px = 0; px < W; px++) {
-    const a = pi0 + (px / W) * nP
-    const b = pi0 + ((px + 1) / W) * nP
+    const t0 = vs + (px / W) * vd
+    const t1 = vs + ((px + 1) / W) * vd
+    const a  = Math.floor(t0 * peakSR / peakStep)
+    const b  = Math.ceil(t1 * peakSR / peakStep)
     let max = 0
-    for (let p = Math.floor(a); p < Math.ceil(b) && p < peaks.length; p++) {
+    for (let p = Math.max(0, a); p < Math.min(peaks.length, b); p++) {
       if (peaks[p] > max) max = peaks[p]
     }
     const h = max * MID * 0.92
@@ -174,7 +177,7 @@ function draw() {
     const x = ((t - vs) / vd) * W
     if (i === bi) {
       ctx.strokeStyle = 'rgba(255,80,80,0.95)'; ctx.lineWidth = 2
-    } else if (i >= bi && (i - bi) % bpbV === 0) {
+    } else if (((i - bi) % bpbV + bpbV) % bpbV === 0) {
       ctx.strokeStyle = 'rgba(255,220,80,0.75)'; ctx.lineWidth = 1
     } else {
       ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1
@@ -219,8 +222,8 @@ function draw() {
     ctx.fillRect(px, MY + MINI / 2 - h, 1, h * 2)
   }
 
-  // Bar markers in minimap
-  for (let i = bi; i < bt.length; i += bpbV) {
+  // Bar markers in minimap (show globally: first bar at bi % bpbV, then every bpbV)
+  for (let i = bi % bpbV; i < bt.length; i += bpbV) {
     const x = (bt[i] / total) * W
     ctx.strokeStyle = i === bi ? 'rgba(255,80,80,0.7)' : 'rgba(255,220,80,0.3)'
     ctx.lineWidth   = i === bi ? 1.5 : 1
@@ -242,12 +245,12 @@ function draw() {
 function scrollToBar() {
   const bt = beatTimes.value, bi = beatIdx.value, n = bpb.value
   if (!bt.length || bi >= bt.length) return
-  const beatDur = 60 / tempo.value
-  const barDur  = beatDur * n
-  const barS    = bt[bi]
+  const barDur  = (60 / tempo.value) * n
+  const barMid  = bt[bi] + barDur / 2
   const viewDur = barDur * 16
-  viewStart.value = Math.max(0, barS - barDur)
-  viewEnd.value   = viewStart.value + viewDur
+  // Center the selected bar; allow vs to go negative (shows void on left edge)
+  viewStart.value = barMid - viewDur / 2
+  viewEnd.value   = barMid + viewDur / 2
 }
 
 // ── WebAudio playback ────────────────────────────────────────────────────────
@@ -332,8 +335,7 @@ function applyState(state) {
   tempo.value       = state.tempo || 120
   beatIdx.value     = 0; bpb.value = 4; bpd.value = 4
   digitBuf.value    = ''; clearTimeout(digitTimer); digitTimer = null
-  const barDur      = (60 / tempo.value) * 4
-  viewStart.value   = 0; viewEnd.value = barDur * 16
+  scrollToBar()
   loadAudio(state.token)
 }
 
