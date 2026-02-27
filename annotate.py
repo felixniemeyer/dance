@@ -27,6 +27,19 @@ import librosa
 import librosa.feature.rhythm   # explicit import needed for lazy-loader in librosa 0.10+
 import numpy as np
 from flask import Flask, abort, jsonify, request, send_file
+from madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor
+
+# Madmom processors are expensive to instantiate (loads model weights from disk).
+# Cache them at module level — one instance serves all songs.
+_madmom_rnn: RNNBeatProcessor         | None = None
+_madmom_dbn: DBNBeatTrackingProcessor | None = None
+
+def _get_madmom_processors() -> tuple[RNNBeatProcessor, DBNBeatTrackingProcessor]:
+    global _madmom_rnn, _madmom_dbn
+    if _madmom_rnn is None:
+        _madmom_rnn = RNNBeatProcessor()
+        _madmom_dbn = DBNBeatTrackingProcessor(fps=100)
+    return _madmom_rnn, _madmom_dbn
 
 from chopper import process_audio_segmented
 from config import samplerate as CHUNK_SR
@@ -43,6 +56,8 @@ def _make_parser() -> argparse.ArgumentParser:
     p.add_argument('--pitch-range', type=float, default=2.0)
     p.add_argument('--port', type=int, default=8050)
     p.add_argument('--host', default='0.0.0.0')
+    p.add_argument('--librosa', action='store_true',
+                   help='Use librosa beat tracker instead of madmom (slower, less accurate)')
     return p
 
 
@@ -129,33 +144,20 @@ def _split_into_segments(beat_times: np.ndarray) -> list[tuple[int, int]]:
     return [(0, len(beat_times))]
 
 
-def _detect_beats(audio: np.ndarray) -> list[dict]:
+def _detect_beats_librosa(audio: np.ndarray) -> list[dict]:
     """
-    Beat detection returning a list of tempo-coherent segment dicts.
-
-    Each dict: {start_time, end_time, beat_times, tempo}
-
-      1. HPSS — isolate the percussive component for a cleaner ODF.
-      2. DP beat tracker anchored to the global BPM prior.
-      3. _split_into_segments — changepoint detection (currently stub).
-      4. _regularize_beats applied independently per segment.
+    Fallback beat detector using librosa (HPSS → DP beat tracker → IBI smoothing).
+    Enabled with --librosa flag.
     """
-    # ── 1. Percussive separation ───────────────────────────────────────────────
     _, y_perc = librosa.effects.hpss(audio, margin=3.0)
-
-    # ── 2. Onset detection on percussive signal ───────────────────────────────
     onset_env = librosa.onset.onset_strength(
         y=y_perc, sr=CHUNK_SR, hop_length=HOP_LENGTH,
         aggregate=np.median,
     )
-
-    # ── 3. Global BPM prior ───────────────────────────────────────────────────
     tempo_global = float(np.atleast_1d(
         librosa.feature.rhythm.tempo(onset_envelope=onset_env,
                                      sr=CHUNK_SR, hop_length=HOP_LENGTH)
     )[0])
-
-    # ── 4. DP beat tracker ────────────────────────────────────────────────────
     _, beat_frames = librosa.beat.beat_track(
         onset_envelope=onset_env,
         sr=CHUNK_SR,
@@ -164,13 +166,10 @@ def _detect_beats(audio: np.ndarray) -> list[dict]:
         tightness=100,
         trim=False,
     )
-
     beat_times = librosa.frames_to_time(beat_frames, sr=CHUNK_SR, hop_length=HOP_LENGTH)
-
     if len(beat_times) < 4:
         return []
 
-    # ── 5. Segment detection + per-segment regularisation ─────────────────────
     seg_slices = _split_into_segments(beat_times)
     segments: list[dict] = []
     for si, ei in seg_slices:
@@ -186,7 +185,39 @@ def _detect_beats(audio: np.ndarray) -> list[dict]:
             'beat_times': smoothed,
             'tempo':      seg_tempo,
         })
+    return segments
 
+
+def _detect_beats_madmom(filepath: str) -> list[dict]:
+    """
+    Primary beat detector using madmom's RNN + DBN pipeline.
+
+    RNNBeatProcessor runs a bi-directional RNN over the audio to produce a
+    beat activation function; DBNBeatTrackingProcessor decodes it with a
+    dynamic Bayesian network, giving stable, accurately-timed beat positions.
+    No post-hoc smoothing is applied — the DBN output is already clean.
+    """
+    rnn, dbn   = _get_madmom_processors()
+    act        = rnn(filepath)
+    beat_times = np.array(dbn(act))
+
+    if len(beat_times) < 4:
+        return []
+
+    seg_slices = _split_into_segments(beat_times)
+    segments: list[dict] = []
+    for si, ei in seg_slices:
+        seg_beats = beat_times[si:ei]
+        if len(seg_beats) < 4:
+            continue
+        ibis      = np.diff(seg_beats)
+        seg_tempo = float(60.0 / np.median(ibis)) if len(ibis) else 120.0
+        segments.append({
+            'start_time': float(seg_beats[0]),
+            'end_time':   float(seg_beats[-1]),
+            'beat_times': seg_beats.tolist(),
+            'tempo':      seg_tempo,
+        })
     return segments
 
 
@@ -203,7 +234,10 @@ def _load_song_data(filepath: str) -> dict | None:
         print(f'  Load error ({name}): {exc}')
         return None
     try:
-        segments = _detect_beats(audio)
+        if _args is not None and _args.librosa:
+            segments = _detect_beats_librosa(audio)
+        else:
+            segments = _detect_beats_madmom(filepath)
     except Exception as exc:
         print(f'  Beat detection error ({name}): {exc}')
         return None

@@ -53,10 +53,10 @@ def find_chunks(path):
     names = []
     for f in ogg_files:
         stem = f[:-4]
-        if os.path.exists(os.path.join(path, stem + '.phase')):
+        if os.path.exists(os.path.join(path, stem + '.bars')):
             names.append(stem)
     if not names:
-        print(f'[inspector] no .ogg+.phase pairs in {path!r} '
+        print(f'[inspector] no .ogg+.bars pairs in {path!r} '
               f'({len(ogg_files)} .ogg, {len(all_files)} total files)')
     return names
 
@@ -139,6 +139,7 @@ def _downsample_waveform(audio, sr):
     return times, audio, duration
 
 def _bar_times_from_phase(phase_times, phase):
+    """Detect bar boundaries from a predicted phase signal (wrap-around crossings)."""
     bar_times = []
     for i in range(1, len(phase)):
         if phase[i - 1] > 0.8 and phase[i] < 0.2:
@@ -146,25 +147,36 @@ def _bar_times_from_phase(phase_times, phase):
             bar_times.append(phase_times[i - 1] + (phase_times[i] - phase_times[i - 1]) * frac)
     return bar_times
 
+
+def _phase_from_bar_times(bar_times, duration):
+    """Reconstruct a sawtooth phase label from bar start times (new .bars format)."""
+    fps = config.samplerate / config.frame_size
+    n_frames = int(duration * fps) + 1
+    times = np.arange(n_frames) / fps
+    phase = np.full(n_frames, np.nan, dtype=np.float32)
+    bars = sorted(bar_times)
+    for i, t0 in enumerate(bars):
+        t1 = bars[i + 1] if i + 1 < len(bars) else t0 + (bars[-1] - bars[-2] if len(bars) >= 2 else 2.0)
+        bar_dur = max(t1 - t0, 1e-6)
+        mask = (times >= t0) & (times < t1)
+        phase[mask] = (times[mask] - t0) / bar_dur
+    return times, phase
+
+
 def load_chunk(chunk_name):
-    ogg_path   = os.path.join(args.chunks_path, chunk_name + '.ogg')
-    phase_path = os.path.join(args.chunks_path, chunk_name + '.phase')
+    ogg_path  = os.path.join(args.chunks_path, chunk_name + '.ogg')
+    bars_path = os.path.join(args.chunks_path, chunk_name + '.bars')
 
     audio, sr = soundfile.read(ogg_path, dtype='float32')
     if audio.ndim == 2:
         audio = audio.mean(axis=1)
 
-    with open(phase_path) as f:
-        phase = np.array([float(l) for l in f if l.strip()], dtype=np.float32)
+    with open(bars_path) as f:
+        bar_times = sorted(float(l) for l in f if l.strip())
 
     duration = len(audio) / sr
-    # Labels are written per frame at fixed frame size, and may include
-    # extra look-ahead horizon beyond audio duration.
-    frame_dur = config.frame_size / sr
-    phase_times = np.arange(len(phase)) * frame_dur + frame_dur / 2
-
     audio_times, audio_ds, _ = _downsample_waveform(audio, sr)
-    bar_times = _bar_times_from_phase(phase_times, phase)
+    phase_times, phase = _phase_from_bar_times(bar_times, duration)
 
     return audio_times, audio_ds, phase_times, phase, bar_times, duration
 

@@ -96,27 +96,26 @@ const viewEnd   = ref(30)
 const canvasEl  = ref(null)
 let   rafId     = null
 
-// ── Derived: flat beat list across all segments ───────────────────────────────
+// ── Per-segment subdivided beat grid builder ──────────────────────────────────
+// Pure helper — applies one segment's own subdivision and returns its beat array.
 
-const allBeats = computed(() => {
-  const out = []
-  for (const seg of segments.value) {
-    for (const t of seg.beat_times) out.push(t)
-  }
-  return out.sort((a, b) => a - b)
-})
-
-// ── Derived beat grid ─────────────────────────────────────────────────────────
-
-const subdividedBeats = computed(() => {
-  const bt = allBeats.value, k = subdivision.value
-  if (k <= 1 || bt.length < 2) return bt
+function buildSegSubdividedBeats(seg) {
+  const bt = seg.beat_times, k = seg.subdivision
+  if (k <= 1 || bt.length < 2) return bt.slice()
   const out = []
   for (let i = 0; i < bt.length - 1; i++) {
     out.push(bt[i])
-    for (let j = 1; j < k; j++) out.push(bt[i] + (bt[i + 1] - bt[i]) * (j / k))
+    for (let j = 1; j < k; j++) out.push(bt[i] + (bt[i + 1] - bt[i]) * j / k)
   }
   out.push(bt[bt.length - 1])
+  return out
+}
+
+// ── Global subdivided beat grid (segments concatenated, already in time order) ─
+
+const subdividedBeats = computed(() => {
+  const out = []
+  for (const seg of segments.value) out.push(...buildSegSubdividedBeats(seg))
   return out
 })
 
@@ -153,7 +152,9 @@ const tempo = computed(() => currentSegment.value?.tempo ?? 120)
 
 watch(currentSegmentIdx, (idx) => {
   const seg = segments.value[idx]
-  if (seg && seg.bpb !== bpb.value) bpb.value = seg.bpb
+  if (!seg) return
+  if (seg.bpb       !== bpb.value)       bpb.value       = seg.bpb
+  if (seg.subdivision !== subdivision.value) subdivision.value = seg.subdivision
 })
 
 watch(bpb, (val) => {
@@ -164,29 +165,56 @@ watch(bpb, (val) => {
 // ── Computed bar extents ──────────────────────────────────────────────────────
 
 const barExtents = computed(() => {
-  const sb = subdividedBeats.value, bi = beatIdx.value, n = effectiveBpb.value
-  if (!sb.length) return [0, 4]
+  const seg = currentSegment.value
+  if (!seg) return [0, 4]
+  const segSb = buildSegSubdividedBeats(seg)
+  const n     = seg.bpb * seg.subdivision
+  const off   = seg.beatOffset ?? 0
+  if (!segSb.length) return [0, 4]
   const ibis = []
-  for (let i = Math.max(0, sb.length - 9); i < sb.length - 1; i++) ibis.push(sb[i + 1] - sb[i])
+  for (let i = Math.max(0, segSb.length - 9); i < segSb.length - 1; i++) ibis.push(segSb[i + 1] - segSb[i])
   ibis.sort((a, b) => a - b)
-  const lbi = ibis[Math.floor(ibis.length / 2)] ?? (60 / tempo.value / subdivision.value)
-  const getT = i => i >= 0 && i < sb.length ? sb[i]
-                  : i < 0                   ? sb[0] + i * lbi
-                  :                           sb[sb.length - 1] + (i - sb.length + 1) * lbi
-  return [getT(bi), getT(bi + n)]
+  const lbi = ibis[Math.floor(ibis.length / 2)] ?? (60 / (seg.tempo || 120) / seg.subdivision)
+  const getT = i => i >= 0 && i < segSb.length ? segSb[i]
+                  : i < 0                       ? segSb[0] + i * lbi
+                  :                               segSb[segSb.length - 1] + (i - segSb.length + 1) * lbi
+  return [getT(off), getT(off + n)]
 })
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
 const statusInfo = computed(() => {
-  const sb   = subdividedBeats.value, bi = beatIdx.value
-  const effN = effectiveBpb.value
-  const nB   = sb.length > bi ? Math.ceil((sb.length - bi) / effN) : 0
-  const [bs] = barExtents.value
-  const k    = subdivision.value
-  const subStr = k > 1 ? ` ×${k} = ${bpb.value * k}/${bpd.value}` : ''
+  const seg = currentSegment.value
+  if (!seg) return ''
+  const segSb = buildSegSubdividedBeats(seg)
+  const effN  = seg.bpb * seg.subdivision
+  const off   = seg.beatOffset ?? 0
+  const nB    = segSb.length > off ? Math.ceil((segSb.length - off) / effN) : 0
+  const [bs]  = barExtents.value
+  const k     = seg.subdivision
+  const subStr = k > 1 ? ` ×${k} = ${seg.bpb * k}/${bpd.value}` : ''
   return `${subStr}   ~${nB} bars   bar @ ${bs.toFixed(3)}s   ${isPlaying.value ? '▶' : '⏸'}`
 })
+
+// ── Beat offset tracking ──────────────────────────────────────────────────────
+// Called after every navigation action to keep seg.beatOffset pointing at the
+// position in the segment's own subdivided grid that matches the global cursor.
+
+function updateBeatOffset() {
+  const seg = currentSegment.value
+  if (!seg) return
+  const sb = subdividedBeats.value
+  const bi = beatIdx.value
+  if (bi < 0 || bi >= sb.length) return
+  const t     = sb[bi]
+  const segSb = buildSegSubdividedBeats(seg)
+  let best = 0, bestDist = Infinity
+  for (let i = 0; i < segSb.length; i++) {
+    const d = Math.abs(segSb[i] - t)
+    if (d < bestDist) { bestDist = d; best = i }
+  }
+  seg.beatOffset = best
+}
 
 // ── Peak computation ──────────────────────────────────────────────────────────
 
@@ -244,8 +272,6 @@ function draw() {
 
   const sb    = subdividedBeats.value
   const bi    = beatIdx.value
-  const effN  = effectiveBpb.value
-  const k     = subdivision.value
   const vs    = viewStart.value, ve = viewEnd.value, vd = ve - vs
   const [barS, barE] = barExtents.value
   const total = audioDuration.value
@@ -271,31 +297,49 @@ function draw() {
     ctx.fillRect(px, MID - h, 1, h * 2)
   }
 
-  // ── Beat & sub-beat lines ──────────────────────────────────────────────────
+  // ── Non-active segment overlay ────────────────────────────────────────────
+  const cseg = currentSegment.value
+  if (cseg) {
+    ctx.fillStyle = 'rgba(0,0,0,0.27)'
+    const segX0 = ((cseg.startTime - vs) / vd) * W
+    const segX1 = ((cseg.endTime   - vs) / vd) * W
+    if (segX0 > 0) ctx.fillRect(0,             0, Math.min(segX0, W),       MAIN)
+    if (segX1 < W) ctx.fillRect(Math.max(segX1, 0), 0, W - Math.max(segX1, 0), MAIN)
+  }
+
+  // ── Beat & sub-beat lines (per segment, each with its own bpb/subdivision) ──
+  const cursorTime = bi >= 0 && bi < sb.length ? sb[bi] : -1
   ctx.save()
   ctx.beginPath(); ctx.rect(0, 0, W, MAIN); ctx.clip()
-  for (let i = 0; i < sb.length; i++) {
-    const t = sb[i]
-    if (t < vs - 0.5 || t > ve + 0.5) continue
-    const x         = ((t - vs) / vd) * W
-    const isRealBeat = (i % k) === 0
-    const isBarStart = ((i - bi) % effN + effN) % effN === 0
-
-    if (i === bi) {
-      ctx.strokeStyle = 'rgba(255,80,80,0.95)'; ctx.lineWidth = 2
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAIN); ctx.stroke()
-    } else if (isBarStart) {
-      ctx.strokeStyle = isRealBeat ? 'rgba(255,220,80,0.75)' : 'rgba(255,200,60,0.45)'
-      ctx.lineWidth   = 1
-      const top = isRealBeat ? 0 : MAIN * 0.25
-      const bot = isRealBeat ? MAIN : MAIN * 0.75
-      ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bot); ctx.stroke()
-    } else if (isRealBeat) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAIN); ctx.stroke()
-    } else {
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1
-      ctx.beginPath(); ctx.moveTo(x, MAIN * 0.35); ctx.lineTo(x, MAIN * 0.65); ctx.stroke()
+  for (const seg of segments.value) {
+    if (seg.endTime < vs - 0.5 || seg.startTime > ve + 0.5) continue
+    const segSb   = buildSegSubdividedBeats(seg)
+    const segEffN = seg.bpb * seg.subdivision
+    const segOff  = seg.beatOffset ?? 0
+    const segK    = seg.subdivision
+    for (let i = 0; i < segSb.length; i++) {
+      const t          = segSb[i]
+      if (t < vs - 0.5 || t > ve + 0.5) continue
+      const x          = ((t - vs) / vd) * W
+      const isRealBeat = (i % segK) === 0
+      const isBarStart = ((i - segOff) % segEffN + segEffN) % segEffN === 0
+      const isCursor   = Math.abs(t - cursorTime) < 1e-6
+      if (isCursor) {
+        ctx.strokeStyle = 'rgba(255,80,80,0.95)'; ctx.lineWidth = 2
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAIN); ctx.stroke()
+      } else if (isBarStart) {
+        ctx.strokeStyle = isRealBeat ? 'rgba(255,220,80,0.75)' : 'rgba(255,200,60,0.45)'
+        ctx.lineWidth   = 1
+        const top = isRealBeat ? 0 : MAIN * 0.25
+        const bot = isRealBeat ? MAIN : MAIN * 0.75
+        ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bot); ctx.stroke()
+      } else if (isRealBeat) {
+        ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAIN); ctx.stroke()
+      } else {
+        ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1
+        ctx.beginPath(); ctx.moveTo(x, MAIN * 0.35); ctx.lineTo(x, MAIN * 0.65); ctx.stroke()
+      }
     }
   }
   ctx.restore()
@@ -356,13 +400,19 @@ function draw() {
     }
   }
 
-  // Bar markers in minimap (globally, using full grid from first bar)
-  const firstBarI = ((bi % effN) + effN) % effN
-  for (let i = firstBarI; i < sb.length; i += effN) {
-    const x = (sb[i] / total) * W
-    ctx.strokeStyle = i === bi ? 'rgba(255,80,80,0.7)' : 'rgba(255,220,80,0.3)'
-    ctx.lineWidth   = i === bi ? 1.5 : 1
-    ctx.beginPath(); ctx.moveTo(x, MY); ctx.lineTo(x, MY + MINI); ctx.stroke()
+  // Bar markers in minimap (per segment, each with its own bpb/subdivision)
+  for (const seg of segments.value) {
+    const segSb   = buildSegSubdividedBeats(seg)
+    const segEffN = seg.bpb * seg.subdivision
+    const firstI  = (seg.beatOffset ?? 0) % segEffN
+    for (let i = firstI; i < segSb.length; i += segEffN) {
+      const t        = segSb[i]
+      const x        = (t / total) * W
+      const isCursor = Math.abs(t - cursorTime) < 1e-6
+      ctx.strokeStyle = isCursor ? 'rgba(255,80,80,0.7)' : 'rgba(255,220,80,0.3)'
+      ctx.lineWidth   = isCursor ? 1.5 : 1
+      ctx.beginPath(); ctx.moveTo(x, MY); ctx.lineTo(x, MY + MINI); ctx.stroke()
+    }
   }
 
   // View window indicator
@@ -456,46 +506,18 @@ async function loadAudio(token) {
 // ── Bar start computation ─────────────────────────────────────────────────────
 
 /**
- * Compute bar starts for a single segment.
+ * Compute bar starts for a single segment using its own beatOffset, bpb, subdivision.
  *
- * If beatIdx is within the segment, the global bi alignment determines which
- * beats are bar starts (respecting the segment's own bpb).
- * Otherwise, we default to the segment's first beat as bar 1.
+ * beatOffset IS a bar-start position in the segment's local subdivided grid.
+ * Bar starts repeat every effN steps, so the first bar start in [0, n) is
+ * beatOffset % effN, giving bar starts at [firstI, firstI+effN, firstI+2*effN, ...].
  */
 function computeBarStartsFor(seg) {
-  const sb   = subdividedBeats.value
-  const bi   = beatIdx.value
-  const k    = subdivision.value
-  const effN = seg.bpb * k
-
-  // Filter subdivided beats to those within this segment
-  const segIdxs  = []
-  const segTimes = []
-  for (let i = 0; i < sb.length; i++) {
-    if (sb[i] >= seg.startTime && sb[i] <= seg.endTime) {
-      segIdxs.push(i)
-      segTimes.push(sb[i])
-    }
-  }
-  if (!segTimes.length) return []
-
-  const biInSeg = bi >= segIdxs[0] && bi <= segIdxs[segIdxs.length - 1]
+  const segSb  = buildSegSubdividedBeats(seg)
+  const effN   = seg.bpb * seg.subdivision
+  const firstI = (seg.beatOffset ?? 0) % effN
   const barStarts = []
-
-  if (biInSeg) {
-    // Align to bi: bar starts are beats where (globalIdx - bi) % effN === 0
-    for (let j = 0; j < segIdxs.length; j++) {
-      if (((segIdxs[j] - bi) % effN + effN) % effN === 0) {
-        barStarts.push(segTimes[j])
-      }
-    }
-  } else {
-    // Default: first beat of segment is bar 1
-    for (let j = 0; j < segTimes.length; j += effN) {
-      barStarts.push(segTimes[j])
-    }
-  }
-
+  for (let i = firstI; i < segSb.length; i += effN) barStarts.push(segSb[i])
   return barStarts.length >= 2 ? barStarts : []
 }
 
@@ -509,13 +531,15 @@ function applyState(state) {
   preloadingNext.value = state.preloading  || false
 
   segments.value = (state.segments || []).map(s => ({
-    id:        s.id,
-    startTime: s.start_time,
-    endTime:   s.end_time,
-    beat_times: s.beat_times,
-    tempo:     s.tempo,
-    status:    'pending',
-    bpb:       4,
+    id:          s.id,
+    startTime:   s.start_time,
+    endTime:     s.end_time,
+    beat_times:  s.beat_times,
+    tempo:       s.tempo,
+    status:      'pending',
+    bpb:         4,
+    subdivision: 1,
+    beatOffset:  0,
   }))
 
   beatIdx.value = 0; bpb.value = 4; bpd.value = 4; subdivision.value = 1
@@ -552,6 +576,8 @@ function setSubdivision(newK) {
   if (newK === subdivision.value) return
   const currentTime = subdividedBeats.value[beatIdx.value] ?? 0
   subdivision.value = newK
+  const seg = segments.value[currentSegmentIdx.value]
+  if (seg) seg.subdivision = newK
   const newSB = subdividedBeats.value
   let best = 0, bestDist = Infinity
   for (let i = 0; i < newSB.length; i++) {
@@ -559,6 +585,7 @@ function setSubdivision(newK) {
     if (d < bestDist) { bestDist = d; best = i }
   }
   beatIdx.value = best
+  updateBeatOffset()
   scrollToBar(); updateLoop(); draw()
 }
 
@@ -603,6 +630,7 @@ function goToNextPending() {
     if (d < bestDist) { bestDist = d; best = i }
   }
   beatIdx.value = best
+  updateBeatOffset()
   scrollToBar()
   return true
 }
@@ -621,22 +649,22 @@ function onKeyDown(e) {
   if (e.key === 'h') {
     e.preventDefault()
     beatIdx.value = Math.max(0, beatIdx.value - 1)
-    scrollToBar(); updateLoop(); draw()
+    updateBeatOffset(); scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 'l') {
     e.preventDefault()
     beatIdx.value = Math.min(sb.length - 1, beatIdx.value + 1)
-    scrollToBar(); updateLoop(); draw()
+    updateBeatOffset(); scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 'j') {
     e.preventDefault()
     if (beatIdx.value < sb.length - 1) beatIdx.value = Math.min(sb.length - 1, beatIdx.value + effN)
-    scrollToBar(); updateLoop(); draw()
+    updateBeatOffset(); scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 'k') {
     e.preventDefault()
     if (beatIdx.value > 0) beatIdx.value -= effN
-    scrollToBar(); updateLoop(); draw()
+    updateBeatOffset(); scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 's') {
     e.preventDefault()
@@ -663,8 +691,8 @@ function onKeyDown(e) {
     const afterBeats  = seg.beat_times.filter(t => t >= cutTime)
     if (beforeBeats.length < 4 || afterBeats.length < 4) return   // too short
 
-    const leftSeg  = { ...seg, endTime:   cutTime, beat_times: beforeBeats, status: 'pending', bpb: bpb.value }
-    const rightSeg = { ...seg, startTime: cutTime, beat_times: afterBeats,  status: 'pending', bpb: bpb.value }
+    const leftSeg  = { ...seg, endTime:   cutTime, beat_times: beforeBeats, status: 'pending', bpb: bpb.value, subdivision: subdivision.value, beatOffset: seg.beatOffset ?? 0 }
+    const rightSeg = { ...seg, startTime: cutTime, beat_times: afterBeats,  status: 'pending', bpb: bpb.value, subdivision: subdivision.value, beatOffset: 0 }
 
     const newSegs = [...segments.value]
     newSegs.splice(idx, 1, leftSeg, rightSeg)
@@ -734,7 +762,7 @@ function onCanvasClick(e) {
     if (d < bestDist) { bestDist = d; bestIdx = i }
   }
   beatIdx.value = bestIdx
-  scrollToBar(); updateLoop(); draw()
+  updateBeatOffset(); scrollToBar(); updateLoop(); draw()
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
