@@ -28,6 +28,7 @@
           <span class="ts-den">{{ bpd }}</span>
         </span>
         <span v-if="subdivision > 1" class="badge badge-subdiv">×{{ subdivision }}</span>
+        <span v-if="isPlaying" class="badge" :class="loopMode ? 'badge-loop-on' : 'badge-loop-off'">{{ loopMode ? '⟳ loop' : '→ free' }}</span>
         <span class="seg-status" :class="`seg-${currentSegment?.status ?? 'pending'}`">
           {{ currentSegment?.status ?? 'pending' }}
         </span>
@@ -36,7 +37,7 @@
       </template>
     </div>
 
-    <pre class="help">h/l ±sub-beat · j/k ±bar · s/d subdivide · 0-9 bpb · Shift+0-9 note · Space loop · c cut · x skip · Enter accept · Esc skip song</pre>
+    <pre class="help">h/l ±sub-beat · j/k ±bar · Space loop · p free play · s/d subdivide · 0-9 bpb · Shift+0-9 note · c cut · x skip · Enter accept · Esc skip song</pre>
   </div>
 </template>
 
@@ -88,6 +89,7 @@ let loopStart     = 0
 let loopEnd       = 4
 
 const isPlaying     = ref(false)
+const loopMode      = ref(true)   // l toggles; false = play freely past bar end
 const audioDuration = ref(0)
 
 // ── View ─────────────────────────────────────────────────────────────────────
@@ -340,9 +342,20 @@ function draw() {
   // ── Playhead ───────────────────────────────────────────────────────────────
   if (isPlaying.value && audioCtx && source) {
     const elapsed = audioCtx.currentTime - srcStartCtx
-    const loopDur = loopEnd - loopStart
-    const pos     = loopDur > 0 ? loopStart + (elapsed % loopDur) : loopStart
-    const px      = ((pos - vs) / vd) * W
+    let pos
+    if (loopMode.value) {
+      const loopDur = loopEnd - loopStart
+      pos = loopDur > 0 ? loopStart + (elapsed % loopDur) : loopStart
+    } else {
+      pos = Math.min(loopStart + elapsed, total)
+      // Scroll view to follow playhead (keep it ~30% from left)
+      const viewDur = ve - vs
+      if (pos > ve - viewDur * 0.1 || pos < vs) {
+        viewStart.value = Math.max(0, pos - viewDur * 0.3)
+        viewEnd.value   = viewStart.value + viewDur
+      }
+    }
+    const px = ((pos - vs) / vd) * W
     if (px >= -2 && px <= W + 2) {
       ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.5
       ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, MAIN); ctx.stroke()
@@ -441,15 +454,17 @@ function stopSource() {
 function startSource(barStart, barEnd) {
   if (!audioCtx || !decodedBuffer) return
   stopSource()
-  source           = audioCtx.createBufferSource()
-  source.buffer    = decodedBuffer
-  source.loop      = true
-  source.loopStart = barStart
-  source.loopEnd   = barEnd
+  source        = audioCtx.createBufferSource()
+  source.buffer = decodedBuffer
+  if (loopMode.value) {
+    source.loop      = true
+    source.loopStart = barStart
+    source.loopEnd   = barEnd
+  }
   source.connect(audioCtx.destination)
-  loopStart    = barStart
-  loopEnd      = barEnd
-  srcStartCtx  = audioCtx.currentTime
+  loopStart   = barStart
+  loopEnd     = barEnd
+  srcStartCtx = audioCtx.currentTime
   source.start(0, barStart)
 }
 
@@ -593,7 +608,12 @@ function accumDigit(d) {
 function commitDigit() {
   clearTimeout(digitTimer); digitTimer = null
   const n = parseInt(digitBuf.value, 10)
-  if (n > 0) { bpb.value = n; scrollToBar(); updateLoop() }
+  if (n > 0) {
+    bpb.value = n
+    const seg = segments.value[currentSegmentIdx.value]
+    if (seg) seg.bpb = n   // sync immediately — watch is queued async, too late for scrollToBar/updateLoop
+    scrollToBar(); updateLoop()
+  }
   digitBuf.value = ''
   draw()
 }
@@ -669,6 +689,12 @@ function onKeyDown(e) {
 
   } else if (e.key === ' ') {
     e.preventDefault()
+    loopMode.value = true
+    togglePlay()
+
+  } else if (e.key === 'p') {
+    e.preventDefault()
+    loopMode.value = false
     togglePlay()
 
   } else if (e.key === 'c') {
@@ -898,7 +924,9 @@ canvas.waveform {
 
 .badge-error   { color: #ff4c4c; background: rgba(255,76,76,0.15) }
 .badge-preload { color: #00bcd4; background: rgba(0,188,212,0.12) }
-.badge-subdiv  { color: #ffd740; background: rgba(255,215,64,0.12) }
+.badge-subdiv    { color: #ffd740; background: rgba(255,215,64,0.12) }
+.badge-loop-on   { color: #00e5ff; background: rgba(0,229,255,0.10) }
+.badge-loop-off  { color: #ff9800; background: rgba(255,152,0,0.10) }
 .badge-typing  { color: #ff9800; background: rgba(255,152,0,0.12) }
 
 /* ── Help text ───────────────────────────────────────────────────────────────── */
