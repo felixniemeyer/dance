@@ -42,6 +42,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
+import { computePeaks as _computePeaks } from '../utils/audio.js'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -219,18 +220,10 @@ function updateBeatOffset() {
 // ── Peak computation ──────────────────────────────────────────────────────────
 
 function computePeaks(ab) {
-  const data = ab.getChannelData(0)
-  const step = Math.round(ab.sampleRate / PPS)
-  peakStep   = step
-  peakSR     = ab.sampleRate
-  const out  = new Float32Array(Math.ceil(data.length / step))
-  for (let i = 0; i < out.length; i++) {
-    const s = i * step, e = Math.min(s + step, data.length)
-    let max = 0
-    for (let j = s; j < e; j++) { const v = Math.abs(data[j]); if (v > max) max = v }
-    out[i] = max
-  }
-  return out
+  const result = _computePeaks(ab, PPS)
+  peakStep = result.step
+  peakSR   = result.sr
+  return result.peaks
 }
 
 // ── Canvas draw ───────────────────────────────────────────────────────────────

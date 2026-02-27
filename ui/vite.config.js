@@ -8,8 +8,13 @@ export default defineConfig({
     allowedHosts: true, // allow any hostname (e.g. felix-pc.local)
     port: 5173,
     proxy: {
-      '/api':   'http://localhost:8050',
-      '/audio': 'http://localhost:8050',
+      '/api':    'http://localhost:8050',
+      '/audio':  'http://localhost:8050',
+      '/health': 'http://localhost:8050',
+      '/inspect': {
+        target:  'http://localhost:8051',
+        rewrite: path => path.replace(/^\/inspect/, ''),
+      },
     },
   },
   build: {

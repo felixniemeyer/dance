@@ -7,10 +7,10 @@ Usage:
 
 Development (Vite hot-reload):
     python annotate.py ...          # backend on :8050
-    cd annotate_ui && npm run dev   # Vite dev server on :5173 (proxies /api + /audio)
+    cd ui && npm run dev   # Vite dev server on :5173 (proxies /api + /audio)
 
 Production (serve built UI from Flask):
-    cd annotate_ui && npm run build
+    cd ui && npm run build
     python annotate.py ...          # serves UI + API on :8050
 """
 
@@ -381,6 +381,11 @@ def _cors(resp):
     return resp
 
 
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok'})
+
+
 @app.route('/api/state')
 def api_state():
     return jsonify(_public_state())
@@ -426,11 +431,11 @@ def serve_audio(token):
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
 def serve_ui(path):
-    dist = Path(__file__).parent / 'annotate_ui' / 'dist'
+    dist = Path(__file__).parent / 'ui' / 'dist'
     if not dist.exists():
         return (
-            'UI not built. Run:  cd annotate_ui && npm run build\n'
-            'Or use the Vite dev server: cd annotate_ui && npm run dev',
+            'UI not built. Run:  cd ui && npm run build\n'
+            'Or use the Vite dev server: cd ui && npm run dev',
             503,
         )
     target = dist / path
