@@ -81,13 +81,14 @@
       </button>
       <span class="time-display">{{ formatTime(playPos) }} / {{ formatTime(duration) }}</span>
       <span v-if="!audioReady && selectedFile" class="loading-badge">loading audio…</span>
+      <span class="help">r random · c chunk/real · Space play · i infer</span>
     </div>
 
   </div>
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, onActivated } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, onActivated, onDeactivated } from 'vue'
 import { computePeaks } from '../utils/audio.js'
 
 // ── State ─────────────────────────────────────────────────────────────────────
@@ -487,10 +488,29 @@ function formatTime(s) {
   return `${m}:${sec}`
 }
 
+// ── Keyboard shortcuts ────────────────────────────────────────────────────────
+
+function onKeyDown(e) {
+  if (e.key === 'r') {
+    e.preventDefault()
+    randomFile()
+  } else if (e.key === 'c') {
+    e.preventDefault()
+    source.value = source.value === 'chunk' ? 'test' : 'chunk'
+  } else if (e.key === ' ') {
+    e.preventDefault()
+    togglePlay()
+  } else if (e.key === 'i') {
+    e.preventDefault()
+    runInfer()
+  }
+}
+
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 let ro = null
 onMounted(async () => {
+  window.addEventListener('keydown', onKeyDown)
   await loadCatalogue()
   ro = new ResizeObserver(() => drawAll())
   if (waveCanvas.value)  ro.observe(waveCanvas.value.parentElement)
@@ -498,11 +518,14 @@ onMounted(async () => {
   drawAll()
 })
 
-// Refresh catalogue every time the Inspect tab is re-activated (KeepAlive).
-// Backend re-scans the directory on each request so new chunks are picked up.
-onActivated(() => loadCatalogue())
+onActivated(() => {
+  window.addEventListener('keydown', onKeyDown)
+  loadCatalogue()
+})
+onDeactivated(() => window.removeEventListener('keydown', onKeyDown))
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', onKeyDown)
   stopAudio()
   if (ro) ro.disconnect()
 })
@@ -657,5 +680,11 @@ onUnmounted(() => {
 .loading-badge {
   color: #00bcd4;
   font-size: 0.8rem;
+}
+
+.help {
+  color: #444;
+  font-size: 0.78rem;
+  margin-left: auto;
 }
 </style>

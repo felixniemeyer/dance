@@ -19,7 +19,10 @@
       </template>
     </div>
 
-    <canvas ref="canvasEl" class="waveform" @click="onCanvasClick" />
+    <div class="canvas-wrap" @click="onCanvasClick">
+      <canvas ref="canvasEl"  class="cv-static" />
+      <canvas ref="overlayEl" class="cv-overlay" />
+    </div>
 
     <div class="status-live">
       <template v-if="!serverDone && !serverError">
@@ -87,6 +90,7 @@ let source        = null
 let srcStartCtx   = 0
 let loopStart     = 0
 let loopEnd       = 4
+let barSyncTimer  = null
 
 const isPlaying     = ref(false)
 const loopMode      = ref(true)   // l toggles; false = play freely past bar end
@@ -97,6 +101,7 @@ const audioDuration = ref(0)
 const viewStart = ref(0)
 const viewEnd   = ref(30)
 const canvasEl  = ref(null)
+const overlayEl = ref(null)
 let   rafId     = null
 
 // ── Per-segment subdivided beat grid builder ──────────────────────────────────
@@ -133,7 +138,8 @@ const currentSegmentIdx = computed(() => {
   const segs = segments.value
   if (!sb.length || !segs.length) return 0
   const t = sb[Math.max(0, Math.min(bi, sb.length - 1))]
-  for (let i = 0; i < segs.length; i++) {
+  // Iterate in reverse: boundary time belongs to the right (later) segment
+  for (let i = segs.length - 1; i >= 0; i--) {
     if (t >= segs[i].startTime && t <= segs[i].endTime) return i
   }
   // Fallback: find nearest segment by midpoint
@@ -339,28 +345,7 @@ function draw() {
   }
   ctx.restore()
 
-  // ── Playhead ───────────────────────────────────────────────────────────────
-  if (isPlaying.value && audioCtx && source) {
-    const elapsed = audioCtx.currentTime - srcStartCtx
-    let pos
-    if (loopMode.value) {
-      const loopDur = loopEnd - loopStart
-      pos = loopDur > 0 ? loopStart + (elapsed % loopDur) : loopStart
-    } else {
-      pos = Math.min(loopStart + elapsed, total)
-      // Scroll view to follow playhead (keep it ~30% from left)
-      const viewDur = ve - vs
-      if (pos > ve - viewDur * 0.1 || pos < vs) {
-        viewStart.value = Math.max(0, pos - viewDur * 0.3)
-        viewEnd.value   = viewStart.value + viewDur
-      }
-    }
-    const px = ((pos - vs) / vd) * W
-    if (px >= -2 && px <= W + 2) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.5
-      ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, MAIN); ctx.stroke()
-    }
-  }
+  // playhead drawn on overlay canvas — see drawPlayhead()
 
   // ── Separator ─────────────────────────────────────────────────────────────
   ctx.fillStyle = '#1e1e3a'
@@ -430,6 +415,42 @@ function draw() {
   ctx.strokeRect(vx0, MY, vx1 - vx0, MINI)
 }
 
+// ── Playhead overlay ──────────────────────────────────────────────────────────
+// Redraws every RAF frame — only draws one line on a transparent overlay canvas.
+// The static canvas underneath only redraws when state actually changes.
+
+function drawPlayhead() {
+  const el = overlayEl.value
+  if (!el) return
+  const dpr = window.devicePixelRatio || 1
+  const W = el.offsetWidth, H = el.offsetHeight
+  if (!W || !H) return
+  const bw = Math.round(W * dpr), bh = Math.round(H * dpr)
+  if (el.width !== bw || el.height !== bh) { el.width = bw; el.height = bh }
+  const ctx = el.getContext('2d')
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+  ctx.clearRect(0, 0, W, H)
+
+  if (!isPlaying.value || !audioCtx || !source) return
+
+  const MAIN = H - MINI - 2
+  const elapsed = audioCtx.currentTime - srcStartCtx
+  let pos
+  if (loopMode.value) {
+    const loopDur = loopEnd - loopStart
+    pos = loopDur > 0 ? loopStart + (elapsed % loopDur) : loopStart
+  } else {
+    pos = Math.min(loopStart + elapsed, audioDuration.value)
+  }
+
+  const vs = viewStart.value, ve = viewEnd.value, vd = ve - vs
+  const px = ((pos - vs) / vd) * W
+  if (px >= -2 && px <= W + 2) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.5
+    ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, MAIN); ctx.stroke()
+  }
+}
+
 // ── View management ───────────────────────────────────────────────────────────
 
 function scrollToBar() {
@@ -488,10 +509,13 @@ async function togglePlay() {
 
 watch(isPlaying, val => {
   if (val) {
-    const loop = () => { draw(); rafId = requestAnimationFrame(loop) }
+    const loop = () => { drawPlayhead(); rafId = requestAnimationFrame(loop) }
     rafId = requestAnimationFrame(loop)
+    if (!loopMode.value) scheduleNextBarSync()
   } else {
     if (rafId) { cancelAnimationFrame(rafId); rafId = null }
+    if (barSyncTimer) { clearTimeout(barSyncTimer); barSyncTimer = null }
+    drawPlayhead()   // clears overlay
     draw()
   }
 })
@@ -527,6 +551,56 @@ function computeBarStartsFor(seg) {
   const barStarts = []
   for (let i = firstI; i < segSb.length; i += effN) barStarts.push(segSb[i])
   return barStarts.length >= 2 ? barStarts : []
+}
+
+/**
+ * During free play, advance beatIdx to whichever bar the playhead is currently in.
+ * No scrollToBar() — the view already follows the playhead.
+ */
+function syncBeatIdxToPos(pos) {
+  // Find the last bar-start time across all segments that is <= pos
+  let lastBarTime = -Infinity
+  for (const seg of segments.value) {
+    for (const t of computeBarStartsFor(seg)) {
+      if (t <= pos && t > lastBarTime) lastBarTime = t
+    }
+  }
+  if (lastBarTime === -Infinity) return
+
+  // Find the beatIdx in the global subdividedBeats array closest to that time
+  const sb = subdividedBeats.value
+  let best = beatIdx.value, bestDist = Infinity
+  for (let i = 0; i < sb.length; i++) {
+    const d = Math.abs(sb[i] - lastBarTime)
+    if (d < bestDist) { bestDist = d; best = i }
+  }
+  if (best !== beatIdx.value) {
+    beatIdx.value = best
+    updateBeatOffset()
+  }
+}
+
+/**
+ * Schedule a one-shot timer to fire just after the next bar start.
+ * Fires once per bar instead of every animation frame.
+ */
+function scheduleNextBarSync() {
+  if (barSyncTimer) { clearTimeout(barSyncTimer); barSyncTimer = null }
+  if (!isPlaying.value || loopMode.value || !audioCtx) return
+
+  const pos = loopStart + (audioCtx.currentTime - srcStartCtx)
+  syncBeatIdxToPos(pos)
+  scrollToBar()
+  draw()
+
+  let nextBarTime = Infinity
+  for (const seg of segments.value)
+    for (const t of computeBarStartsFor(seg))
+      if (t > pos && t < nextBarTime) nextBarTime = t
+
+  if (nextBarTime === Infinity) return
+  // Fire 20 ms after the bar start so pos is safely past it
+  barSyncTimer = setTimeout(scheduleNextBarSync, (nextBarTime - pos) * 1000 + 20)
 }
 
 // ── State management ──────────────────────────────────────────────────────────
@@ -789,7 +863,7 @@ function onCanvasClick(e) {
 onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
   const ro = new ResizeObserver(() => draw())
-  ro.observe(canvasEl.value)
+  ro.observe(canvasEl.value.parentElement)
   try {
     const resp = await fetch('/api/state')
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
@@ -851,13 +925,21 @@ html, body {
 
 /* ── Canvas ──────────────────────────────────────────────────────────────────── */
 
-canvas.waveform {
+.canvas-wrap {
   flex: 1;
-  width: 100%;
+  position: relative;
   min-height: 0;
-  display: block;
   cursor: pointer;
 }
+
+.cv-static, .cv-overlay {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  display: block;
+}
+
+.cv-overlay { pointer-events: none }
 
 /* ── Bottom status bar ──────────────────────────────────────────────────────── */
 
