@@ -1,17 +1,10 @@
 <template>
   <div class="app">
-    <!-- File-level status (server-driven) -->
     <div class="status-file">{{ statusFile }}</div>
-
-    <!-- Waveform canvas: main view + minimap in one element -->
     <canvas ref="canvasEl" class="waveform" @click="onCanvasClick" />
-
-    <!-- Live annotation status (instant, local state) -->
     <div class="status-live">{{ statusLive }}</div>
-
-    <!-- Help -->
-    <pre class="help">h/l shift onset ±1   j/k next/prev bar   digits = beats/bar (fast-type for multi-digit)   Shift+digit = note value
-Space loop bar   Enter save+next   Esc skip</pre>
+    <pre class="help">h/l shift onset ±1 sub-beat   j/k next/prev bar   s/d subdivide ±1 (detect offbeat)
+digits = beats/bar   Shift+digit = note value   Space loop   Enter save+next   Esc skip</pre>
   </div>
 </template>
 
@@ -20,8 +13,10 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const PPS  = 200   // peaks per second stored in the peaks array
-const MINI = 50    // minimap height in CSS px
+const PPS         = 200   // peaks per second
+const MINI        = 50    // minimap height px
+const BAR_FRAC    = 0.15  // current bar occupies this fraction of view width
+const MAX_SUBDIV  = 8
 
 // ── Server state ─────────────────────────────────────────────────────────────
 
@@ -34,25 +29,24 @@ const loading       = ref(false)
 
 // ── Local annotation state ────────────────────────────────────────────────────
 
-const beatIdx  = ref(0)
-const bpb      = ref(4)   // beats per bar  (numerator)
-const bpd      = ref(4)   // note value      (denominator, display only)
-const digitBuf = ref('')  // multi-digit accumulation buffer
-let   digitTimer = null
+const beatIdx    = ref(0)   // index into subdividedBeats
+const bpb        = ref(4)   // beats per bar (musical, before subdivision)
+const bpd        = ref(4)   // note value denominator (display only)
+const subdivision = ref(1)  // sub-beat grid: 1=off, 2=halves, 3=triplets, …
+const digitBuf   = ref('')
+let   digitTimer  = null
 
 // ── Audio ────────────────────────────────────────────────────────────────────
 
-let audioCtx      = null    // AudioContext (lazy-created on first gesture)
-let decodedBuffer = null    // AudioBuffer from decodeAudioData
-let peaks         = null    // Float32Array, ~PPS samples/sec
-let peakStep      = 0       // actual samples per peak bucket
-let peakSR        = 1       // sampleRate of the decoded buffer
-let source        = null    // current AudioBufferSourceNode
-
-// Playback tracking (needed for animated playhead)
-let srcStartCtx   = 0       // audioCtx.currentTime when source.start() was called
-let loopStart     = 0       // seconds
-let loopEnd       = 4       // seconds
+let audioCtx      = null
+let decodedBuffer = null
+let peaks         = null
+let peakStep      = 0
+let peakSR        = 1
+let source        = null
+let srcStartCtx   = 0
+let loopStart     = 0
+let loopEnd       = 4
 
 const isPlaying     = ref(false)
 const audioDuration = ref(0)
@@ -64,28 +58,40 @@ const viewEnd   = ref(30)
 const canvasEl  = ref(null)
 let   rafId     = null
 
-// ── Computed ─────────────────────────────────────────────────────────────────
+// ── Derived beat grid ─────────────────────────────────────────────────────────
+
+// Full grid with sub-beats interpolated between real detected beats.
+const subdividedBeats = computed(() => {
+  const bt = beatTimes.value, k = subdivision.value
+  if (k <= 1 || bt.length < 2) return bt
+  const out = []
+  for (let i = 0; i < bt.length - 1; i++) {
+    out.push(bt[i])
+    for (let j = 1; j < k; j++) out.push(bt[i] + (bt[i + 1] - bt[i]) * (j / k))
+  }
+  out.push(bt[bt.length - 1])
+  return out
+})
+
+// Effective beats-per-bar in the sub-beat grid (= musical bpb × subdivision)
+const effectiveBpb = computed(() => bpb.value * subdivision.value)
+
+// ── Computed bar extents (respects actual beat positions + subdivision) ────────
 
 const barExtents = computed(() => {
-  const bt = beatTimes.value, bi = beatIdx.value, n = bpb.value
-  if (!bt.length || bi >= bt.length) return [0, 4]
-  const s  = bt[bi]
-  const ei = bi + n
-  if (ei < bt.length) {
-    // Use the actual next downbeat — each bar can have a slightly different
-    // duration now that the DP tracker follows real onset positions.
-    return [s, bt[ei]]
-  }
-  // Near end of song: extrapolate using the median of the last few local IBIs
-  // (more accurate than global tempo for tracks with slight drift).
+  const sb = subdividedBeats.value, bi = beatIdx.value, n = effectiveBpb.value
+  if (!sb.length || bi >= sb.length) return [0, 4]
+  const s = sb[bi], ei = bi + n
+  if (ei < sb.length) return [s, sb[ei]]
+  // Near end: extrapolate from local sub-beat periods
   const ibis = []
-  for (let i = Math.max(0, bt.length - 9); i < bt.length - 1; i++) {
-    ibis.push(bt[i + 1] - bt[i])
-  }
+  for (let i = Math.max(0, sb.length - 9); i < sb.length - 1; i++) ibis.push(sb[i + 1] - sb[i])
   ibis.sort((a, b) => a - b)
-  const localBeat = ibis[Math.floor(ibis.length / 2)] ?? (60 / tempo.value)
+  const localBeat = ibis[Math.floor(ibis.length / 2)] ?? (60 / tempo.value / subdivision.value)
   return [s, s + localBeat * n]
 })
+
+// ── Status ────────────────────────────────────────────────────────────────────
 
 const statusFile = computed(() => {
   if (serverDone.value) return 'All files annotated — you can close this window.'
@@ -94,14 +100,16 @@ const statusFile = computed(() => {
 })
 
 const statusLive = computed(() => {
-  const bt  = beatTimes.value, bi = beatIdx.value, n = bpb.value, d = bpd.value
-  const nB  = bt.length > bi ? Math.ceil((bt.length - bi) / n) : 0
-  const [bs] = barExtents.value
-  const buf  = digitBuf.value
+  const sb = subdividedBeats.value, bi = beatIdx.value
+  const n = bpb.value, d = bpd.value, k = subdivision.value
+  const effN = effectiveBpb.value
+  const nB   = sb.length > bi ? Math.ceil((sb.length - bi) / effN) : 0
+  const [bs]  = barExtents.value
+  const subStr = k > 1 ? ` ×${k} (=${n * k}/${d})` : ''
   return (
-    `beat_idx=${bi}   ${n}/${d}   ~${nB} bars   bar_start=${bs.toFixed(2)}s` +
-    `   ${isPlaying.value ? '▶ PLAYING' : '⏸ paused'}` +
-    (buf ? `   [typing: ${buf}…]` : '')
+    `${n}/${d}${subStr}   ~${nB} bars   bar_start=${bs.toFixed(3)}s` +
+    `   ${isPlaying.value ? '▶' : '⏸'}` +
+    (digitBuf.value ? `   [typing: ${digitBuf.value}…]` : '')
   )
 })
 
@@ -127,23 +135,17 @@ function computePeaks(ab) {
 function draw() {
   const el = canvasEl.value
   if (!el) return
-
   const dpr = window.devicePixelRatio || 1
-  const W   = el.offsetWidth
-  const H   = el.offsetHeight
+  const W = el.offsetWidth, H = el.offsetHeight
   if (!W || !H) return
-
-  // Resize backing store to match CSS size × DPR
   const bw = Math.round(W * dpr), bh = Math.round(H * dpr)
   if (el.width !== bw || el.height !== bh) { el.width = bw; el.height = bh }
-
-  const ctx  = el.getContext('2d')
+  const ctx = el.getContext('2d')
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
-  const MAIN = H - MINI - 2   // main waveform area height
+  const MAIN = H - MINI - 2
   const MID  = MAIN / 2
 
-  // ── Background ────────────────────────────────────────────────────────────
   ctx.fillStyle = '#0f0f1e'
   ctx.fillRect(0, 0, W, H)
 
@@ -154,19 +156,21 @@ function draw() {
     return
   }
 
-  const bt   = beatTimes.value, bi = beatIdx.value, bpbV = bpb.value
-  const vs   = viewStart.value, ve = viewEnd.value,  vd   = ve - vs
+  const sb    = subdividedBeats.value
+  const bi    = beatIdx.value
+  const effN  = effectiveBpb.value
+  const k     = subdivision.value
+  const vs    = viewStart.value, ve = viewEnd.value, vd = ve - vs
   const [barS, barE] = barExtents.value
   const total = audioDuration.value
 
-  // ── Bar highlight ─────────────────────────────────────────────────────────
+  // ── Bar highlight ──────────────────────────────────────────────────────────
   ctx.fillStyle = 'rgba(0,200,80,0.08)'
   const bx0 = ((barS - vs) / vd) * W
   const bx1 = ((barE - vs) / vd) * W
   ctx.fillRect(bx0, 0, bx1 - bx0, MAIN)
 
-  // ── Waveform ──────────────────────────────────────────────────────────────
-  // Map screen pixel → time → peak index. Pixels outside [0, duration] are void.
+  // ── Waveform ───────────────────────────────────────────────────────────────
   ctx.fillStyle = '#3a8aef'
   for (let px = 0; px < W; px++) {
     const t0 = vs + (px / W) * vd
@@ -181,33 +185,47 @@ function draw() {
     ctx.fillRect(px, MID - h, 1, h * 2)
   }
 
-  // ── Beat lines ────────────────────────────────────────────────────────────
+  // ── Beat & sub-beat lines ──────────────────────────────────────────────────
   ctx.save()
   ctx.beginPath(); ctx.rect(0, 0, W, MAIN); ctx.clip()
-  for (let i = 0; i < bt.length; i++) {
-    const t = bt[i]
+  for (let i = 0; i < sb.length; i++) {
+    const t = sb[i]
     if (t < vs - 0.5 || t > ve + 0.5) continue
-    const x = ((t - vs) / vd) * W
+    const x         = ((t - vs) / vd) * W
+    const isRealBeat = (i % k) === 0
+    const isBarStart = ((i - bi) % effN + effN) % effN === 0
+
     if (i === bi) {
+      // Current downbeat — always full height, red
       ctx.strokeStyle = 'rgba(255,80,80,0.95)'; ctx.lineWidth = 2
-    } else if (((i - bi) % bpbV + bpbV) % bpbV === 0) {
-      ctx.strokeStyle = 'rgba(255,220,80,0.75)'; ctx.lineWidth = 1
-    } else {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAIN); ctx.stroke()
+    } else if (isBarStart) {
+      // Other bar starts: full height if real beat, half height if sub-beat
+      ctx.strokeStyle = isRealBeat ? 'rgba(255,220,80,0.75)' : 'rgba(255,200,60,0.45)'
+      ctx.lineWidth   = 1
+      const top = isRealBeat ? 0 : MAIN * 0.25
+      const bot = isRealBeat ? MAIN : MAIN * 0.75
+      ctx.beginPath(); ctx.moveTo(x, top); ctx.lineTo(x, bot); ctx.stroke()
+    } else if (isRealBeat) {
+      // Plain beat, not a bar start
       ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAIN); ctx.stroke()
+    } else {
+      // Pure sub-beat marker — short tick in the middle
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1
+      ctx.beginPath(); ctx.moveTo(x, MAIN * 0.35); ctx.lineTo(x, MAIN * 0.65); ctx.stroke()
     }
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MAIN); ctx.stroke()
   }
   ctx.restore()
 
-  // ── Playhead ──────────────────────────────────────────────────────────────
+  // ── Playhead ───────────────────────────────────────────────────────────────
   if (isPlaying.value && audioCtx && source) {
-    const elapsed  = audioCtx.currentTime - srcStartCtx
-    const loopDur  = loopEnd - loopStart
-    const pos      = loopDur > 0 ? loopStart + (elapsed % loopDur) : loopStart
-    const px       = ((pos - vs) / vd) * W
+    const elapsed = audioCtx.currentTime - srcStartCtx
+    const loopDur = loopEnd - loopStart
+    const pos     = loopDur > 0 ? loopStart + (elapsed % loopDur) : loopStart
+    const px      = ((pos - vs) / vd) * W
     if (px >= -2 && px <= W + 2) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.8)'
-      ctx.lineWidth   = 1.5
+      ctx.strokeStyle = 'rgba(255,255,255,0.8)'; ctx.lineWidth = 1.5
       ctx.beginPath(); ctx.moveTo(px, 0); ctx.lineTo(px, MAIN); ctx.stroke()
     }
   }
@@ -218,11 +236,10 @@ function draw() {
 
   // ── Minimap ───────────────────────────────────────────────────────────────
   const MY = MAIN + 2
-
   ctx.fillStyle = '#080814'
   ctx.fillRect(0, MY, W, MINI)
 
-  // Full-song waveform (downsampled)
+  // Full-song waveform
   ctx.fillStyle = '#1a4a8a'
   for (let px = 0; px < W; px++) {
     const a = Math.floor((px / W) * peaks.length)
@@ -235,9 +252,10 @@ function draw() {
     ctx.fillRect(px, MY + MINI / 2 - h, 1, h * 2)
   }
 
-  // Bar markers in minimap (show globally: first bar at bi % bpbV, then every bpbV)
-  for (let i = bi % bpbV; i < bt.length; i += bpbV) {
-    const x = (bt[i] / total) * W
+  // Bar markers in minimap (globally, not just from bi)
+  const firstBarI = bi % effN
+  for (let i = firstBarI; i < sb.length; i += effN) {
+    const x = (sb[i] / total) * W
     ctx.strokeStyle = i === bi ? 'rgba(255,80,80,0.7)' : 'rgba(255,220,80,0.3)'
     ctx.lineWidth   = i === bi ? 1.5 : 1
     ctx.beginPath(); ctx.moveTo(x, MY); ctx.lineTo(x, MY + MINI); ctx.stroke()
@@ -248,49 +266,47 @@ function draw() {
   const vx1 = (ve / total) * W
   ctx.fillStyle   = 'rgba(255,255,255,0.10)'
   ctx.fillRect(vx0, MY, vx1 - vx0, MINI)
-  ctx.strokeStyle = 'rgba(255,255,255,0.35)'
-  ctx.lineWidth   = 1
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 1
   ctx.strokeRect(vx0, MY, vx1 - vx0, MINI)
 }
 
 // ── View management ───────────────────────────────────────────────────────────
 
 function scrollToBar() {
-  const bt = beatTimes.value, bi = beatIdx.value
-  if (!bt.length || bi >= bt.length) return
+  const sb = subdividedBeats.value, bi = beatIdx.value
+  if (!sb.length || bi >= sb.length) return
   const [barS, barE] = barExtents.value
-  const barDur  = barE - barS          // actual duration of this specific bar
+  const barDur  = barE - barS
   const barMid  = barS + barDur / 2
-  const viewDur = barDur * 16
+  // Scale view so the current bar always occupies BAR_FRAC of the canvas width
+  const viewDur = barDur / BAR_FRAC
   viewStart.value = barMid - viewDur / 2
   viewEnd.value   = barMid + viewDur / 2
 }
 
-// ── WebAudio playback ────────────────────────────────────────────────────────
+// ── WebAudio playback ─────────────────────────────────────────────────────────
 
 function stopSource() {
   if (!source) return
   try { source.stop() } catch (_) {}
-  source.disconnect()
-  source = null
+  source.disconnect(); source = null
 }
 
 function startSource(barStart, barEnd) {
   if (!audioCtx || !decodedBuffer) return
   stopSource()
-  source            = audioCtx.createBufferSource()
-  source.buffer     = decodedBuffer
-  source.loop       = true
-  source.loopStart  = barStart
-  source.loopEnd    = barEnd
+  source           = audioCtx.createBufferSource()
+  source.buffer    = decodedBuffer
+  source.loop      = true
+  source.loopStart = barStart
+  source.loopEnd   = barEnd
   source.connect(audioCtx.destination)
-  loopStart         = barStart
-  loopEnd           = barEnd
-  srcStartCtx       = audioCtx.currentTime
+  loopStart    = barStart
+  loopEnd      = barEnd
+  srcStartCtx  = audioCtx.currentTime
   source.start(0, barStart)
 }
 
-// Restart loop at updated bar extents while playing
 function updateLoop() {
   if (!isPlaying.value) return
   const [bs, be] = barExtents.value
@@ -302,16 +318,13 @@ async function togglePlay() {
   if (!audioCtx) audioCtx = new AudioContext()
   if (audioCtx.state === 'suspended') await audioCtx.resume()
   if (isPlaying.value) {
-    stopSource()
-    isPlaying.value = false
+    stopSource(); isPlaying.value = false
   } else {
     const [bs, be] = barExtents.value
-    startSource(bs, be)
-    isPlaying.value = true
+    startSource(bs, be); isPlaying.value = true
   }
 }
 
-// RAF loop while playing (animates playhead)
 watch(isPlaying, val => {
   if (val) {
     const loop = () => { draw(); rafId = requestAnimationFrame(loop) }
@@ -328,12 +341,12 @@ async function loadAudio(token) {
   stopSource(); isPlaying.value = false
   decodedBuffer = null; peaks = null; audioDuration.value = 0
   draw()
-  const resp      = await fetch(`/audio/${token}`)
-  const arrayBuf  = await resp.arrayBuffer()
+  const resp     = await fetch(`/audio/${token}`)
+  const arrayBuf = await resp.arrayBuffer()
   if (!audioCtx) audioCtx = new AudioContext()
-  decodedBuffer   = await audioCtx.decodeAudioData(arrayBuf)
+  decodedBuffer       = await audioCtx.decodeAudioData(arrayBuf)
   audioDuration.value = decodedBuffer.duration
-  peaks           = computePeaks(decodedBuffer)
+  peaks               = computePeaks(decodedBuffer)
   draw()
 }
 
@@ -346,7 +359,7 @@ function applyState(state) {
   remaining.value   = state.remaining || 0
   beatTimes.value   = state.beat_times || []
   tempo.value       = state.tempo || 120
-  beatIdx.value     = 0; bpb.value = 4; bpd.value = 4
+  beatIdx.value     = 0; bpb.value = 4; bpd.value = 4; subdivision.value = 1
   digitBuf.value    = ''; clearTimeout(digitTimer); digitTimer = null
   scrollToBar()
   loadAudio(state.token)
@@ -367,6 +380,25 @@ async function apiAction(type, extra = {}) {
   }
 }
 
+// ── Subdivision ───────────────────────────────────────────────────────────────
+
+function setSubdivision(newK) {
+  newK = Math.max(1, Math.min(MAX_SUBDIV, newK))
+  if (newK === subdivision.value) return
+  // Remember current time position before the grid changes
+  const currentTime = subdividedBeats.value[beatIdx.value] ?? 0
+  subdivision.value = newK
+  // Find nearest index in new subdivided grid
+  const newSB = subdividedBeats.value  // recomputed synchronously
+  let best = 0, bestDist = Infinity
+  for (let i = 0; i < newSB.length; i++) {
+    const d = Math.abs(newSB[i] - currentTime)
+    if (d < bestDist) { bestDist = d; best = i }
+  }
+  beatIdx.value = best
+  scrollToBar(); updateLoop(); draw()
+}
+
 // ── Multi-digit bpb input ─────────────────────────────────────────────────────
 
 function accumDigit(d) {
@@ -378,12 +410,12 @@ function accumDigit(d) {
 function commitDigit() {
   clearTimeout(digitTimer); digitTimer = null
   const n = parseInt(digitBuf.value, 10)
-  if (n > 0) { bpb.value = n; updateLoop() }
+  if (n > 0) { bpb.value = n; scrollToBar(); updateLoop() }
   digitBuf.value = ''
   draw()
 }
 
-// ── Keyboard ─────────────────────────────────────────────────────────────────
+// ── Keyboard ──────────────────────────────────────────────────────────────────
 
 function onKeyDown(e) {
   if (serverDone.value || loading.value) return
@@ -391,7 +423,8 @@ function onKeyDown(e) {
   const code    = e.code || ''
   const isDigit = code.startsWith('Digit') || code.startsWith('Numpad')
   const digit   = isDigit ? code.replace('Digit', '').replace('Numpad', '') : null
-  const bt      = beatTimes.value
+  const sb      = subdividedBeats.value
+  const effN    = effectiveBpb.value
 
   if (e.key === 'h') {
     e.preventDefault()
@@ -400,18 +433,26 @@ function onKeyDown(e) {
 
   } else if (e.key === 'l') {
     e.preventDefault()
-    beatIdx.value = Math.min(bt.length - 1, beatIdx.value + 1)
+    beatIdx.value = Math.min(sb.length - 1, beatIdx.value + 1)
     scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 'j') {
     e.preventDefault()
-    beatIdx.value = Math.min(bt.length - 1, beatIdx.value + bpb.value)
+    beatIdx.value = Math.min(sb.length - 1, beatIdx.value + effN)
     scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 'k') {
     e.preventDefault()
-    beatIdx.value = Math.max(0, beatIdx.value - bpb.value)
+    beatIdx.value = Math.max(0, beatIdx.value - effN)
     scrollToBar(); updateLoop(); draw()
+
+  } else if (e.key === 's') {
+    e.preventDefault()
+    setSubdivision(subdivision.value + 1)
+
+  } else if (e.key === 'd') {
+    e.preventDefault()
+    setSubdivision(subdivision.value - 1)
 
   } else if (e.key === ' ') {
     e.preventDefault()
@@ -420,7 +461,11 @@ function onKeyDown(e) {
   } else if (e.key === 'Enter') {
     e.preventDefault()
     commitDigit()
-    apiAction('save', { beat_idx: beatIdx.value, bpb: bpb.value })
+    // Compute bar_starts from the subdivided grid and send directly
+    const bi   = beatIdx.value
+    const barStarts = []
+    for (let i = bi; i < sb.length; i += effN) barStarts.push(sb[i])
+    apiAction('save', { bar_starts: barStarts })
 
   } else if (e.key === 'Escape') {
     e.preventDefault()
@@ -430,12 +475,10 @@ function onKeyDown(e) {
   } else if (isDigit && digit !== null) {
     e.preventDefault()
     if (e.shiftKey) {
-      // Shift+digit → denominator (note value: 4, 8, 16…)
       const d = parseInt(digit, 10)
       bpd.value = d === 0 ? 16 : d
       draw()
     } else {
-      // Plain digit → accumulate beats-per-bar counter
       accumDigit(digit)
     }
   }
@@ -449,16 +492,16 @@ function onCanvasClick(e) {
   const rect = el.getBoundingClientRect()
   const y    = e.clientY - rect.top
   const MAIN = rect.height - MINI - 2
-  if (y <= MAIN) return   // click in main waveform area — ignore for now
+  if (y <= MAIN) return
 
   const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
   const pos  = frac * audioDuration.value
-  const bt   = beatTimes.value, bpbV = bpb.value
+  const sb   = subdividedBeats.value
+  const effN = effectiveBpb.value
 
-  // Find nearest bar position
   let bestIdx = beatIdx.value, bestDist = Infinity
-  for (let i = 0; i < bt.length; i += bpbV) {
-    const d = Math.abs(bt[i] - pos)
+  for (let i = 0; i < sb.length; i += effN) {
+    const d = Math.abs(sb[i] - pos)
     if (d < bestDist) { bestDist = d; bestIdx = i }
   }
   beatIdx.value = bestIdx
@@ -471,7 +514,6 @@ onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
   const ro = new ResizeObserver(() => draw())
   ro.observe(canvasEl.value)
-
   const resp = await fetch('/api/state')
   applyState(await resp.json())
 })

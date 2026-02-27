@@ -266,10 +266,10 @@ def api_action():
     if act == 'save' and not _state.get('done'):
         fp = _state.get('_filepath')
         if fp and fp in _audio_cache:
-            bt  = _state.get('beat_times', [])
-            bi  = int(data.get('beat_idx', 0))
-            bpb = int(data.get('bpb', 4))
-            bar_starts = _compute_bar_starts(bt, bi, bpb)
+            # Client computes bar_starts directly (supports subdivision offsets)
+            bar_starts = [float(t) for t in data.get('bar_starts', [])]
+            if not bar_starts:
+                return jsonify({'error': 'bar_starts missing'}), 400
             stem = Path(fp).stem
             n    = process_audio(
                 _audio_cache[fp], bar_starts, stem,
