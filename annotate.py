@@ -18,6 +18,7 @@ import argparse
 import mimetypes
 import random
 import secrets
+import threading
 from pathlib import Path
 
 import librosa
@@ -56,26 +57,25 @@ TEMPO_CV_THRESHOLD = 0.20
 class TempoChangeError(ValueError):
     """Raised when a structural tempo change is detected."""
 
+
 # ── module-level state ────────────────────────────────────────────────────────
 
-_audio_cache:   dict[str, np.ndarray] = {}
-_token_to_file: dict[str, str]        = {}
-_files:         list[str]             = []   # remaining queue (mutated in-place)
-_state:         dict                  = {'done': True}
+_current_audio: np.ndarray | None = None   # decoded audio for the song currently being annotated
+_token_to_file: dict[str, str]    = {}
+_files:         list[str]         = []     # remaining queue (mutated in-place)
+_state:         dict              = {'done': True}
 _args  = None
 _out_path: Path = None
 
+# ── Background preload ────────────────────────────────────────────────────────
+
+_preload_lock   = threading.Lock()
+_preload_for:   str | None           = None   # filepath currently being preloaded
+_preload_data:  dict | None          = None   # result dict when done, None while loading or if failed
+_preload_thread: threading.Thread | None = None
+
 
 # ── audio + beat detection ────────────────────────────────────────────────────
-
-def _load_audio(filepath: str) -> np.ndarray:
-    if filepath in _audio_cache:
-        return _audio_cache[filepath]
-    audio, _ = librosa.load(filepath, sr=CHUNK_SR, mono=True)
-    _audio_cache.clear()
-    _audio_cache[filepath] = audio
-    return audio
-
 
 def _make_token(filepath: str) -> str:
     tok = secrets.token_urlsafe(8)
@@ -84,30 +84,31 @@ def _make_token(filepath: str) -> str:
     return tok
 
 
-def _snap_to_peaks(
-    beat_times:  list[float],
-    onset_env:   np.ndarray,
-    env_times:   np.ndarray,
-    radius_frac: float = 0.30,
-) -> list[float]:
+def _regularize_beats(beat_times: list[float], smooth_beats: int = 8) -> list[float]:
     """
-    Refine each beat by shifting it to the nearest local onset peak within
-    ±radius_frac × median beat period. Beats with no peak in the window are
-    left unchanged.
+    Smooth inter-beat intervals with a running median, then rebuild positions.
+
+    Kills high-frequency jitter (from imperfect onset snapping or DP errors)
+    while preserving slow tempo drift (live music without metronome).
+
+    smooth_beats : window width in beats.  8 ≈ 2 bars at 4/4 → ~4 s at 120 BPM.
+                   At each beat the local tempo is estimated as the median IBI
+                   of its ±(smooth_beats//2) neighbours, so the effective
+                   smoothing time is smooth_beats × beat_period.
     """
-    if len(beat_times) < 2:
+    arr = np.array(beat_times, dtype=np.float64)
+    if len(arr) < 3:
         return beat_times
-    beat_period = float(np.median(np.diff(beat_times)))
-    radius      = radius_frac * beat_period
-    refined     = []
-    for bt in beat_times:
-        lo = int(np.searchsorted(env_times, bt - radius))
-        hi = int(np.searchsorted(env_times, bt + radius))
-        if lo >= hi:
-            refined.append(bt)
-        else:
-            refined.append(float(env_times[lo + int(np.argmax(onset_env[lo:hi]))]))
-    return refined
+    ibis = np.diff(arr)
+    half = smooth_beats // 2
+    smooth = np.array([
+        np.median(ibis[max(0, i - half) : i + half + 1])
+        for i in range(len(ibis))
+    ])
+    out    = np.empty(len(arr))
+    out[0] = arr[0]
+    out[1:] = out[0] + np.cumsum(smooth)
+    return out.tolist()
 
 
 def _detect_beats(audio: np.ndarray) -> tuple[float, list[float]]:
@@ -123,10 +124,8 @@ def _detect_beats(audio: np.ndarray) -> tuple[float, list[float]]:
          anchored to the global BPM prior.  Handles slight live-music tempo
          drift; CV check auto-skips structural tempo changes.
 
-      3. Beat snapping — shift each DP-predicted beat to the nearest onset
-         peak within ±30 % of the beat period.  This is the biggest quality
-         gain: beats land on actual transients rather than hovering between
-         them.
+      3. IBI smoothing — running median over ±4 beats removes high-frequency
+         jitter while allowing slow tempo drift (live music without metronome).
     """
     # ── 1. Percussive separation ───────────────────────────────────────────────
     _, y_perc = librosa.effects.hpss(audio, margin=3.0)
@@ -166,23 +165,98 @@ def _detect_beats(audio: np.ndarray) -> tuple[float, list[float]]:
             f'IBI CV {cv:.2f} > {TEMPO_CV_THRESHOLD} — structural tempo change'
         )
 
-    # ── 6. Snap beats to nearest onset peak ───────────────────────────────────
-    env_times  = librosa.frames_to_time(
-        np.arange(len(onset_env)), sr=CHUNK_SR, hop_length=HOP_LENGTH)
-    beat_times = _snap_to_peaks(beat_times.tolist(), onset_env, env_times)
+    # ── 6. Smooth IBI sequence to remove jitter, preserve slow drift ──────────
+    beat_times = _regularize_beats(beat_times.tolist())
 
     return tempo, beat_times
 
 
-def _compute_bar_starts(beat_times: list, beat_idx: int, bpb: int) -> list[float]:
-    return list(beat_times[beat_idx::bpb])
+def _load_song_data(filepath: str) -> dict | None:
+    """
+    Load audio and run beat detection for one file.
+    Pure function — no global side-effects.
+    Returns a data dict on success or None on failure/skip.
+    """
+    name = Path(filepath).name
+    try:
+        audio, _ = librosa.load(filepath, sr=CHUNK_SR, mono=True)
+    except Exception as exc:
+        print(f'  Load error ({name}): {exc}')
+        return None
+    try:
+        tempo, beat_times = _detect_beats(audio)
+    except TempoChangeError as exc:
+        print(f'  Skipped ({name}): {exc}')
+        return None
+    except Exception as exc:
+        print(f'  Beat detection error ({name}): {exc}')
+        return None
+    if not beat_times:
+        print(f'  No beats detected ({name}), skipping')
+        return None
+    return {
+        '_filepath':  filepath,
+        '_audio':     audio,
+        'filename':   name,
+        'beat_times': beat_times,
+        'tempo':      tempo,
+    }
+
+
+# ── preload helpers ───────────────────────────────────────────────────────────
+
+def _preload_worker(filepath: str) -> None:
+    """Thread target: load + analyse one file, store result under lock."""
+    data = _load_song_data(filepath)
+    with _preload_lock:
+        global _preload_data
+        if _preload_for == filepath:   # still relevant (not superseded)
+            _preload_data = data       # None means failed
+
+
+def _start_preload(filepath: str) -> None:
+    """Start background preloading of filepath (no-op if already loading it)."""
+    global _preload_for, _preload_data, _preload_thread
+    with _preload_lock:
+        if _preload_for == filepath:
+            return   # already loading this file
+        _preload_for  = filepath
+        _preload_data = None
+    print(f'\n[preload] {Path(filepath).name}')
+    _preload_thread = threading.Thread(
+        target=_preload_worker, args=(filepath,), daemon=True)
+    _preload_thread.start()
+
+
+def _consume_preload(filepath: str) -> dict | None:
+    """
+    Return preloaded data for filepath if available.
+    Blocks (joins thread) if the preload is still in progress.
+    Returns None if the file wasn't preloaded or preload failed.
+    """
+    global _preload_data, _preload_for
+    # If the thread is still running for this exact file, wait for it
+    if _preload_thread is not None and _preload_thread.is_alive():
+        with _preload_lock:
+            target = _preload_for
+        if target == filepath:
+            print('  [waiting for preload]')
+            _preload_thread.join()
+    # Collect result
+    with _preload_lock:
+        if _preload_for == filepath and _preload_data is not None:
+            data = _preload_data
+            _preload_data = None
+            _preload_for  = None
+            return data
+    return None
 
 
 # ── file queue ────────────────────────────────────────────────────────────────
 
 def _advance(max_skip: int = 20) -> None:
-    """Pop next file from _files, load it, update _state."""
-    global _state
+    """Pop next file from _files, use preloaded data if available, update _state."""
+    global _state, _current_audio
     for _ in range(max_skip + 1):
         if not _files:
             _state = {'done': True, 'remaining': 0}
@@ -193,34 +267,38 @@ def _advance(max_skip: int = 20) -> None:
             continue
         name = Path(filepath).name
         print(f'\n[annotate] {name}  ({len(_files)} remaining)')
-        try:
-            audio = _load_audio(filepath)
-        except Exception as exc:
-            print(f'  Load error: {exc}, skipping…')
-            continue
-        try:
-            tempo, beat_times = _detect_beats(audio)
-        except TempoChangeError as exc:
-            print(f'  Skipped (tempo change): {exc}')
-            continue
-        except Exception as exc:
-            print(f'  Beat detection error: {exc}, skipping…')
-            continue
-        if not beat_times:
-            print('  No beats detected, skipping…')
-            continue
-        print(f'  {tempo:.1f} BPM  {len(beat_times)} beats')
-        token  = _make_token(filepath)
+
+        # ── Use preloaded data if available ──────────────────────────────────
+        data = _consume_preload(filepath)
+        if data is None:
+            print('  [preload miss — loading synchronously]')
+            data = _load_song_data(filepath)
+        else:
+            print('  [preload hit]')
+
+        if data is None:
+            continue   # file failed analysis — try the next one
+
+        print(f'  {data["tempo"]:.1f} BPM  {len(data["beat_times"])} beats')
+
+        # ── Activate current song ─────────────────────────────────────────────
+        _current_audio = data['_audio']
+        token = _make_token(filepath)
         _state = {
             'done':       False,
-            '_filepath':  filepath,   # internal only
+            '_filepath':  filepath,
             'token':      token,
             'filename':   name,
-            'beat_times': beat_times,
-            'tempo':      tempo,
+            'beat_times': data['beat_times'],
+            'tempo':      data['tempo'],
             'remaining':  len(_files),
         }
+
+        # ── Kick off preload for the next queued file ─────────────────────────
+        if _files:
+            _start_preload(_files[0])
         return
+
     _state = {'done': True, 'remaining': 0}
 
 
@@ -228,13 +306,16 @@ def _public_state() -> dict:
     """Strip internal keys before sending to client."""
     if _state.get('done'):
         return {'done': True, 'remaining': 0}
+    with _preload_lock:
+        preloading = _preload_thread is not None and _preload_thread.is_alive()
     return {
-        'done':       False,
-        'token':      _state['token'],
-        'filename':   _state['filename'],
-        'beat_times': _state['beat_times'],
-        'tempo':      _state['tempo'],
-        'remaining':  _state['remaining'],
+        'done':        False,
+        'token':       _state['token'],
+        'filename':    _state['filename'],
+        'beat_times':  _state['beat_times'],
+        'tempo':       _state['tempo'],
+        'remaining':   _state['remaining'],
+        'preloading':  preloading,
     }
 
 
@@ -264,15 +345,13 @@ def api_action():
     act  = data.get('type', '')
 
     if act == 'save' and not _state.get('done'):
-        fp = _state.get('_filepath')
-        if fp and fp in _audio_cache:
-            # Client computes bar_starts directly (supports subdivision offsets)
+        if _current_audio is not None:
             bar_starts = [float(t) for t in data.get('bar_starts', [])]
             if not bar_starts:
                 return jsonify({'error': 'bar_starts missing'}), 400
-            stem = Path(fp).stem
-            n    = process_audio(
-                _audio_cache[fp], bar_starts, stem,
+            stem = Path(_state['_filepath']).stem
+            n = process_audio(
+                _current_audio, bar_starts, stem,
                 str(_out_path), _args.chunks_per_song, _args.pitch_range,
                 overwrite=False,
             )
@@ -341,9 +420,9 @@ def main():
         print('Nothing left to annotate.')
         return
 
-    _advance()   # load first file
+    _advance()   # load first file + start preloading second
     print(f'Starting backend → http://{_args.host}:{_args.port}')
-    app.run(host=_args.host, port=_args.port, debug=False, threaded=False)
+    app.run(host=_args.host, port=_args.port, debug=False, threaded=True)
 
 
 if __name__ == '__main__':

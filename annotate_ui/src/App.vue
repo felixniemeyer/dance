@@ -1,10 +1,38 @@
 <template>
   <div class="app">
-    <div class="status-file">{{ statusFile }}</div>
+    <div class="status-file">
+      <template v-if="serverError">
+        <span class="badge badge-error">⚠ server offline</span>
+        <span class="meta"> — start  python annotate.py  then refresh</span>
+      </template>
+      <template v-else-if="serverDone">
+        All files annotated — you can close this window.
+      </template>
+      <template v-else>
+        <span class="filename">{{ currentFile }}</span>
+        <span class="meta">
+          &nbsp;|&nbsp; {{ tempo.toFixed(1) }} BPM
+          &nbsp;|&nbsp; {{ remaining }} remaining
+          <span v-if="preloadingNext" class="badge badge-preload" title="next song is being analysed">⟳ next</span>
+        </span>
+      </template>
+    </div>
+
     <canvas ref="canvasEl" class="waveform" @click="onCanvasClick" />
-    <div class="status-live">{{ statusLive }}</div>
-    <pre class="help">h/l shift onset ±1 sub-beat   j/k next/prev bar   s/d subdivide ±1 (detect offbeat)
-digits = beats/bar   Shift+digit = note value   Space loop   Enter save+next   Esc skip</pre>
+
+    <div class="status-live">
+      <template v-if="!serverDone && !serverError">
+        <span class="timesig">
+          <span class="ts-num">{{ bpb }}</span>
+          <span class="ts-den">{{ bpd }}</span>
+        </span>
+        <span v-if="subdivision > 1" class="badge badge-subdiv">×{{ subdivision }}</span>
+        <span class="status-info">{{ statusInfo }}</span>
+        <span v-if="digitBuf" class="badge badge-typing">{{ digitBuf }}…</span>
+      </template>
+    </div>
+
+    <pre class="help">h/l ±sub-beat · j/k ±bar · s/d subdivide · 0-9 bpb · Shift+0-9 note · Space loop · Enter save+next · Esc skip</pre>
   </div>
 </template>
 
@@ -20,12 +48,14 @@ const MAX_SUBDIV  = 8
 
 // ── Server state ─────────────────────────────────────────────────────────────
 
-const serverDone    = ref(false)
-const currentFile   = ref('')
-const remaining     = ref(0)
-const beatTimes     = ref([])
-const tempo         = ref(120)
-const loading       = ref(false)
+const serverDone     = ref(false)
+const serverError    = ref(false)
+const currentFile    = ref('')
+const remaining      = ref(0)
+const beatTimes      = ref([])
+const tempo          = ref(120)
+const loading        = ref(false)
+const preloadingNext = ref(false)
 
 // ── Local annotation state ────────────────────────────────────────────────────
 
@@ -80,37 +110,28 @@ const effectiveBpb = computed(() => bpb.value * subdivision.value)
 
 const barExtents = computed(() => {
   const sb = subdividedBeats.value, bi = beatIdx.value, n = effectiveBpb.value
-  if (!sb.length || bi >= sb.length) return [0, 4]
-  const s = sb[bi], ei = bi + n
-  if (ei < sb.length) return [s, sb[ei]]
-  // Near end: extrapolate from local sub-beat periods
+  if (!sb.length) return [0, 4]
+  // Local sub-beat interval for extrapolation beyond array bounds
   const ibis = []
   for (let i = Math.max(0, sb.length - 9); i < sb.length - 1; i++) ibis.push(sb[i + 1] - sb[i])
   ibis.sort((a, b) => a - b)
-  const localBeat = ibis[Math.floor(ibis.length / 2)] ?? (60 / tempo.value / subdivision.value)
-  return [s, s + localBeat * n]
+  const lbi = ibis[Math.floor(ibis.length / 2)] ?? (60 / tempo.value / subdivision.value)
+  const getT = i => i >= 0 && i < sb.length ? sb[i]
+                  : i < 0                   ? sb[0] + i * lbi
+                  :                           sb[sb.length - 1] + (i - sb.length + 1) * lbi
+  return [getT(bi), getT(bi + n)]
 })
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
-const statusFile = computed(() => {
-  if (serverDone.value) return 'All files annotated — you can close this window.'
-  if (loading.value)    return 'Loading…'
-  return `${currentFile.value}   |   ${tempo.value.toFixed(1)} BPM   |   ${remaining.value} files remaining`
-})
-
-const statusLive = computed(() => {
-  const sb = subdividedBeats.value, bi = beatIdx.value
-  const n = bpb.value, d = bpd.value, k = subdivision.value
+const statusInfo = computed(() => {
+  const sb   = subdividedBeats.value, bi = beatIdx.value
   const effN = effectiveBpb.value
   const nB   = sb.length > bi ? Math.ceil((sb.length - bi) / effN) : 0
-  const [bs]  = barExtents.value
-  const subStr = k > 1 ? ` ×${k} (=${n * k}/${d})` : ''
-  return (
-    `${n}/${d}${subStr}   ~${nB} bars   bar_start=${bs.toFixed(3)}s` +
-    `   ${isPlaying.value ? '▶' : '⏸'}` +
-    (digitBuf.value ? `   [typing: ${digitBuf.value}…]` : '')
-  )
+  const [bs] = barExtents.value
+  const k    = subdivision.value
+  const subStr = k > 1 ? ` ×${k} = ${bpb.value * k}/${bpd.value}` : ''
+  return `${subStr}   ~${nB} bars   bar @ ${bs.toFixed(3)}s   ${isPlaying.value ? '▶' : '⏸'}`
 })
 
 // ── Peak computation ──────────────────────────────────────────────────────────
@@ -150,9 +171,20 @@ function draw() {
   ctx.fillRect(0, 0, W, H)
 
   if (!peaks) {
-    ctx.fillStyle = '#444'
-    ctx.font = '13px monospace'
-    ctx.fillText(loading.value ? 'Decoding audio…' : 'No audio loaded', 16, H / 2)
+    ctx.font = '14px monospace'
+    if (serverError.value) {
+      ctx.fillStyle = '#ff4c4c'
+      ctx.fillText('Cannot reach server — is annotate.py running?', 16, H / 2)
+    } else if (loading.value) {
+      ctx.fillStyle = '#00bcd4'
+      ctx.fillText('Analysing audio… please wait', 16, H / 2)
+    } else if (serverDone.value) {
+      ctx.fillStyle = '#aaa'
+      ctx.fillText('All done!', 16, H / 2)
+    } else {
+      ctx.fillStyle = '#555'
+      ctx.fillText('No audio loaded', 16, H / 2)
+    }
     return
   }
 
@@ -252,8 +284,8 @@ function draw() {
     ctx.fillRect(px, MY + MINI / 2 - h, 1, h * 2)
   }
 
-  // Bar markers in minimap (globally, not just from bi)
-  const firstBarI = bi % effN
+  // Bar markers in minimap (globally, using full grid from first bar)
+  const firstBarI = ((bi % effN) + effN) % effN
   for (let i = firstBarI; i < sb.length; i += effN) {
     const x = (sb[i] / total) * W
     ctx.strokeStyle = i === bi ? 'rgba(255,80,80,0.7)' : 'rgba(255,220,80,0.3)'
@@ -354,11 +386,12 @@ async function loadAudio(token) {
 
 function applyState(state) {
   if (state.done) { serverDone.value = true; draw(); return }
-  serverDone.value  = false
-  currentFile.value = state.filename  || ''
-  remaining.value   = state.remaining || 0
-  beatTimes.value   = state.beat_times || []
-  tempo.value       = state.tempo || 120
+  serverDone.value     = false
+  currentFile.value    = state.filename    || ''
+  remaining.value      = state.remaining   || 0
+  beatTimes.value      = state.beat_times  || []
+  tempo.value          = state.tempo       || 120
+  preloadingNext.value = state.preloading  || false
   beatIdx.value     = 0; bpb.value = 4; bpd.value = 4; subdivision.value = 1
   digitBuf.value    = ''; clearTimeout(digitTimer); digitTimer = null
   scrollToBar()
@@ -374,7 +407,13 @@ async function apiAction(type, extra = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ type, ...extra }),
     })
+    if (!resp.ok) { console.error('api/action error', resp.status); return }
+    serverError.value = false
     applyState(await resp.json())
+  } catch (err) {
+    console.error('api/action fetch failed:', err)
+    serverError.value = true
+    draw()
   } finally {
     loading.value = false
   }
@@ -438,12 +477,12 @@ function onKeyDown(e) {
 
   } else if (e.key === 'j') {
     e.preventDefault()
-    beatIdx.value = Math.min(sb.length - 1, beatIdx.value + effN)
+    if (beatIdx.value < sb.length - 1) beatIdx.value = Math.min(sb.length - 1, beatIdx.value + effN)
     scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 'k') {
     e.preventDefault()
-    beatIdx.value = Math.max(0, beatIdx.value - effN)
+    if (beatIdx.value > 0) beatIdx.value -= effN   // allow one step into negative
     scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 's') {
@@ -461,10 +500,20 @@ function onKeyDown(e) {
   } else if (e.key === 'Enter') {
     e.preventDefault()
     commitDigit()
-    // Compute bar_starts from the subdivided grid and send directly
-    const bi   = beatIdx.value
+    const bi = beatIdx.value
+    // Local sub-beat interval for extrapolating bars before sb[0]
+    const ibis = []
+    for (let i = Math.max(0, sb.length - 9); i < sb.length - 1; i++) ibis.push(sb[i + 1] - sb[i])
+    ibis.sort((a, b) => a - b)
+    const lbi = ibis[Math.floor(ibis.length / 2)] ?? (60 / tempo.value / subdivision.value)
+    const getT = i => i >= 0 && i < sb.length ? sb[i] : i < 0 ? sb[0] + i * lbi : sb[sb.length - 1] + (i - sb.length + 1) * lbi
+    // JS % can be negative, so force into [0, effN)
+    const firstI = ((bi % effN) + effN) % effN
     const barStarts = []
-    for (let i = bi; i < sb.length; i += effN) barStarts.push(sb[i])
+    // Extrapolated bars before sb[0] (when bi < 0)
+    for (let i = bi; i < firstI; i += effN) barStarts.push(getT(i))
+    // Detected bars
+    for (let i = firstI; i < sb.length; i += effN) barStarts.push(sb[i])
     apiAction('save', { bar_starts: barStarts })
 
   } else if (e.key === 'Escape') {
@@ -514,8 +563,16 @@ onMounted(async () => {
   window.addEventListener('keydown', onKeyDown)
   const ro = new ResizeObserver(() => draw())
   ro.observe(canvasEl.value)
-  const resp = await fetch('/api/state')
-  applyState(await resp.json())
+  try {
+    const resp = await fetch('/api/state')
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    serverError.value = false
+    applyState(await resp.json())
+  } catch (err) {
+    console.error('Could not reach server:', err)
+    serverError.value = true
+    draw()
+  }
 })
 
 onUnmounted(() => {
@@ -531,8 +588,9 @@ onUnmounted(() => {
 html, body {
   height: 100%;
   background: #0f0f1e;
-  color: #eee;
+  color: #fff;
   font-family: 'Courier New', monospace;
+  font-size: 1rem;
 }
 
 #app { height: 100% }
@@ -545,14 +603,20 @@ html, body {
   gap: 5px;
 }
 
+/* ── Top status bar ─────────────────────────────────────────────────────────── */
+
 .status-file {
-  font-size: 11px;
-  color: #555;
+  font-size: 1rem;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   flex-shrink: 0;
 }
+
+.status-file .filename { color: #fff; font-weight: bold }
+.status-file .meta     { color: #888 }
+
+/* ── Canvas ──────────────────────────────────────────────────────────────────── */
 
 canvas.waveform {
   flex: 1;
@@ -562,16 +626,69 @@ canvas.waveform {
   cursor: pointer;
 }
 
+/* ── Bottom status bar ──────────────────────────────────────────────────────── */
+
 .status-live {
-  font-size: 13px;
-  color: #ccc;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1rem;
+  color: #fff;
   flex-shrink: 0;
 }
 
+.status-info { color: #ccc }
+
+/* ── Time signature ─────────────────────────────────────────────────────────── */
+
+.timesig {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.1;
+  font-size: 1rem;
+  font-weight: bold;
+  gap: 1px;
+}
+
+.ts-num {
+  color: #00e5ff;
+  background: rgba(0, 229, 255, 0.10);
+  padding: 0 6px;
+  border-radius: 2px;
+}
+
+.ts-den {
+  color: #ff69b4;
+  background: rgba(255, 105, 180, 0.10);
+  padding: 0 6px;
+  border-radius: 2px;
+}
+
+/* ── Badges ──────────────────────────────────────────────────────────────────── */
+
+.badge {
+  font-size: 0.8rem;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.badge-error   { color: #ff4c4c; background: rgba(255,76,76,0.15) }
+.badge-preload { color: #00bcd4; background: rgba(0,188,212,0.12) }
+.badge-subdiv  { color: #ffd740; background: rgba(255,215,64,0.12) }
+.badge-typing  { color: #ff9800; background: rgba(255,152,0,0.12) }
+
+/* ── Help text ───────────────────────────────────────────────────────────────── */
+
 .help {
-  font-size: 10px;
-  color: #383850;
-  line-height: 1.6;
+  font-size: 1rem;
+  color: #888;
+  line-height: 1.4;
   flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>
