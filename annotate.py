@@ -21,6 +21,8 @@ import secrets
 import threading
 from pathlib import Path
 
+import subprocess
+
 import librosa
 import librosa.feature.rhythm   # explicit import needed for lazy-loader in librosa 0.10+
 import numpy as np
@@ -48,6 +50,11 @@ def _make_parser() -> argparse.ArgumentParser:
 
 AUDIO_EXTENSIONS = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac'}
 HOP_LENGTH = 512
+
+# Beat detection runs only on this many seconds of audio.
+# HPSS cost is linear in length; 90 s is enough for a solid tempo estimate
+# and reduces analysis time ~3× for a typical 4-minute track.
+BEAT_DETECT_SECS = 90
 
 # If the coefficient of variation of inter-beat intervals exceeds this value,
 # the song likely has a structural tempo change and is auto-skipped.
@@ -179,7 +186,7 @@ def _load_song_data(filepath: str) -> dict | None:
     """
     name = Path(filepath).name
     try:
-        audio, _ = librosa.load(filepath, sr=CHUNK_SR, mono=True)
+        audio = _load_audio_ffmpeg(filepath, CHUNK_SR)
     except Exception as exc:
         print(f'  Load error ({name}): {exc}')
         return None
