@@ -50,11 +50,58 @@ N_GRADUAL_SEGS = 8
 
 # ── audio helpers ──────────────────────────────────────────────────────────────
 
-def _time_stretch(audio, rate):
-    """Stretch audio by rate (>1 = faster = shorter output). Returns float32 array."""
+def _atempo_chain(rate: float) -> str:
+    """
+    Build an ffmpeg atempo filter string for any rate.
+    atempo is limited to [0.5, 2.0] per filter node, so chain them for
+    values outside that range (e.g. rate=4.0 → 'atempo=2.0,atempo=2.0').
+    """
+    filters = []
+    r = rate
+    while r > 2.0 + 1e-9:
+        filters.append('atempo=2.0')
+        r /= 2.0
+    while r < 0.5 - 1e-9:
+        filters.append('atempo=0.5')
+        r *= 2.0
+    if abs(r - 1.0) > 1e-4:
+        filters.append(f'atempo={r:.8f}')
+    return ','.join(filters) if filters else 'anull'
+
+
+def _time_stretch(audio: np.ndarray, rate: float) -> np.ndarray:
+    """
+    WSOLA time-stretch via ffmpeg atempo (SoundTouch engine) — same algorithm
+    as Mixxx's time-scaling.  Pure time-domain: no phase vocoder, no spectral
+    smearing, transients stay sharp.
+
+    rate > 1 → faster (shorter output); rate < 1 → slower (longer output).
+    Falls back to the input unchanged on ffmpeg error.
+    """
     if abs(rate - 1.0) < 1e-4:
         return audio
-    return librosa.effects.time_stretch(audio.astype(np.float32), rate=rate)
+
+    fd_in,  tmp_in  = tempfile.mkstemp(suffix='.wav')
+    fd_out, tmp_out = tempfile.mkstemp(suffix='.wav')
+    os.close(fd_in); os.close(fd_out)
+    try:
+        soundfile.write(tmp_in, audio.astype(np.float32), CHUNK_SR)
+        cmd = [
+            'ffmpeg', '-v', 'warning', '-y',
+            '-i', tmp_in,
+            '-af', _atempo_chain(rate),
+            '-ar', str(CHUNK_SR),
+            tmp_out,
+        ]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            return audio   # graceful fallback
+        out, _ = soundfile.read(tmp_out, dtype='float32')
+        return out.astype(np.float32)
+    finally:
+        for p in (tmp_in, tmp_out):
+            if os.path.exists(p):
+                os.remove(p)
 
 
 def _ensure_len(audio, n_samples):
