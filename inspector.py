@@ -219,6 +219,47 @@ def test_audio(filename):
     return send_file(path, mimetype=mime)
 
 
+@app.route('/delete', methods=['POST', 'OPTIONS'])
+def delete_chunks():
+    if request.method == 'OPTIONS':
+        return '', 200
+    data  = request.get_json(force=True)
+    stem  = data.get('stem', '')
+    scope = data.get('scope', 'this')   # 'this' | 'song' | 'sf'
+
+    def parse_stem(s):
+        parts = s.split('__')
+        if len(parts) >= 3:
+            return parts[0], parts[-2]   # song, sf
+        if len(parts) == 2:
+            return parts[0], None
+        return s, None
+
+    all_stems = find_chunks(args.chunks_path)
+
+    if scope == 'this':
+        targets = [stem]
+    elif scope == 'song':
+        song, _ = parse_stem(stem)
+        targets = [s for s in all_stems if parse_stem(s)[0] == song]
+    elif scope == 'sf':
+        _, sf = parse_stem(stem)
+        targets = [s for s in all_stems if sf and parse_stem(s)[1] == sf]
+    else:
+        return jsonify({'error': 'invalid scope'}), 400
+
+    deleted = 0
+    for t in targets:
+        for ext in ('.ogg', '.bars'):
+            path = os.path.join(args.chunks_path, t + ext)
+            if os.path.exists(path):
+                os.remove(path)
+                if ext == '.ogg':
+                    deleted += 1
+
+    return jsonify({'deleted': deleted, 'stems': targets})
+
+
 @app.route('/infer', methods=['POST', 'OPTIONS'])
 def infer():
     if request.method == 'OPTIONS':

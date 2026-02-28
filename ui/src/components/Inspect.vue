@@ -72,6 +72,26 @@
 
     </div>
 
+    <!-- ── Delete dialog ────────────────────────────────────────────────── -->
+    <div v-if="deleteDialogOpen" class="dlg-overlay" @click.self="cancelDelete">
+      <div class="dlg">
+        <div class="dlg-title">Delete</div>
+        <div class="dlg-file">{{ selectedFile }}</div>
+        <div class="dlg-options">
+          <div v-for="(opt, i) in deleteOptions" :key="opt.key"
+               class="dlg-opt" :class="{ 'dlg-opt-selected': i === deleteChoice }"
+               @click="deleteChoice = i">
+            {{ opt.label }}
+          </div>
+        </div>
+        <div class="dlg-actions">
+          <button class="btn btn-del-confirm" @click="confirmDelete">Confirm</button>
+          <button class="btn" @click="cancelDelete">Cancel</button>
+          <span class="dlg-hint">↑↓ select · Enter confirm · Esc cancel</span>
+        </div>
+      </div>
+    </div>
+
     <!-- ── Waveform canvas ───────────────────────────────────────────────── -->
     <div class="canvas-wrap canvas-wave">
       <canvas ref="waveCanvas" class="cv" />
@@ -91,7 +111,7 @@
       </button>
       <span class="time-display">{{ formatTime(playPos) }} / {{ formatTime(duration) }}</span>
       <span v-if="!audioReady && selectedFile" class="loading-badge">loading audio…</span>
-      <span class="help">r rand · n/p next/prev · b back · s song · f SF · c src · Space play · i infer</span>
+      <span class="help">r rand · n/p next/prev · b back · s song · f SF · d del · c src · Space play · i infer</span>
     </div>
 
   </div>
@@ -119,6 +139,10 @@ const inferRunning = ref(false)
 const historyChunk = ref([])
 const historyTest  = ref([])
 let   skipHistory  = false          // set true before programmatic file changes that shouldn't push
+
+// delete dialog
+const deleteDialogOpen = ref(false)
+const deleteChoice     = ref(0)     // index into deleteOptions
 
 // label data
 const barTimes    = ref([])         // from .bars
@@ -177,6 +201,17 @@ const sameSfList = computed(() => {
   const { sf } = parseStem(selectedFile.value)
   if (!sf) return []
   return fileList.value.filter(f => parseStem(f).sf === sf)
+})
+
+const deleteOptions = computed(() => {
+  if (source.value !== 'chunk') {
+    return [{ key: 'this', label: 'Delete this file' }]
+  }
+  return [
+    { key: 'this', label: 'Delete this chunk' },
+    { key: 'sf',   label: `Delete all from same soundfont (${sameSfList.value.length})` },
+    { key: 'song', label: `Delete all from same song (${sameSongList.value.length})` },
+  ]
 })
 
 // ── Watchers ──────────────────────────────────────────────────────────────────
@@ -567,6 +602,54 @@ function nextSameSf() {
   selectedFile.value = list[(cur + 1) % list.length]
 }
 
+function openDeleteDialog() {
+  if (!selectedFile.value) return
+  deleteChoice.value = 0
+  deleteDialogOpen.value = true
+}
+
+function cancelDelete() {
+  deleteDialogOpen.value = false
+}
+
+async function confirmDelete() {
+  deleteDialogOpen.value = false
+  const stem  = selectedFile.value
+  const scope = deleteOptions.value[deleteChoice.value].key
+
+  // Pick next file before deleting so we have somewhere to go
+  const list   = fileList.value
+  const curIdx = list.indexOf(stem)
+  const nextFile = list[curIdx + 1] ?? list[curIdx - 1] ?? ''
+
+  try {
+    const r = await fetch('/inspect/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stem, scope }),
+    })
+    const data = await r.json()
+    if (data.error) throw new Error(data.error)
+
+    // Remove deleted stems from local catalogue
+    const deleted = new Set(data.stems ?? [stem])
+    chunks.value = chunks.value.filter(c => !deleted.has(c))
+
+    // Also prune history
+    historyChunk.value = historyChunk.value.filter(c => !deleted.has(c))
+
+    // Navigate away from deleted file
+    if (deleted.has(selectedFile.value)) {
+      const remaining = fileList.value
+      skipHistory = true
+      selectedFile.value = (remaining.includes(nextFile) ? nextFile : remaining[0]) ?? ''
+    }
+  } catch (e) {
+    statusMsg.value  = `Delete failed: ${e.message}`
+    inferError.value = true
+  }
+}
+
 function formatTime(s) {
   if (!s) return '0:00'
   const m = Math.floor(s / 60)
@@ -581,6 +664,22 @@ function onKeyDown(e) {
   const tag = document.activeElement?.tagName
   if (tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA') return
 
+  // Delete dialog mode
+  if (deleteDialogOpen.value) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      deleteChoice.value = Math.min(deleteChoice.value + 1, deleteOptions.value.length - 1)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      deleteChoice.value = Math.max(deleteChoice.value - 1, 0)
+    } else if (e.key === 'Enter') {
+      e.preventDefault(); confirmDelete()
+    } else if (e.key === 'Escape') {
+      e.preventDefault(); cancelDelete()
+    }
+    return
+  }
+
   if (e.key === 'r') {
     e.preventDefault(); randomFile()
   } else if (e.key === 'n') {
@@ -593,6 +692,8 @@ function onKeyDown(e) {
     e.preventDefault(); nextSameSong()
   } else if (e.key === 'f') {
     e.preventDefault(); nextSameSf()
+  } else if (e.key === 'd') {
+    e.preventDefault(); openDeleteDialog()
   } else if (e.key === 'c') {
     e.preventDefault()
     source.value = source.value === 'chunk' ? 'test' : 'chunk'
@@ -630,6 +731,7 @@ onUnmounted(() => {
 
 <style scoped>
 .inspect {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -782,6 +884,82 @@ onUnmounted(() => {
 .help {
   color: #444;
   font-size: 0.78rem;
+  margin-left: auto;
+}
+
+/* ── Delete dialog ───────────────────────────────────────────────────────────── */
+
+.dlg-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.dlg {
+  background: #0e0e22;
+  border: 1px solid #2a2a5a;
+  border-radius: 5px;
+  padding: 18px 22px;
+  min-width: 340px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dlg-title {
+  font-size: 0.9rem;
+  color: #ff5252;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.dlg-file {
+  font-size: 0.75rem;
+  color: #666;
+  word-break: break-all;
+}
+
+.dlg-options {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dlg-opt {
+  padding: 6px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  color: #bbb;
+  font-size: 0.83rem;
+  border: 1px solid transparent;
+}
+.dlg-opt:hover { background: #1a1a38 }
+.dlg-opt-selected {
+  background: #1a1a38;
+  border-color: #ff5252;
+  color: #fff;
+}
+
+.dlg-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-del-confirm {
+  background: #4a1010;
+  border-color: #8a2020;
+  color: #ff8080;
+}
+.btn-del-confirm:hover { background: #6a1818; color: #ffaaaa }
+
+.dlg-hint {
+  font-size: 0.75rem;
+  color: #444;
   margin-left: auto;
 }
 </style>
