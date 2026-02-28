@@ -26,10 +26,20 @@
       <div class="ctrl-group" style="flex:1; min-width:0">
         <label class="lbl">File</label>
         <div class="row-inline">
-          <select class="sel" v-model="selectedFile">
+          <select class="sel" v-model="selectedFile" @keydown.stop>
             <option v-for="f in fileList" :key="f" :value="f">{{ f }}</option>
           </select>
           <button class="btn" @click="randomFile">Random</button>
+          <button class="btn" @click="copyName" :disabled="!selectedFile">Copy</button>
+          <span class="sep" style="color:#222">│</span>
+          <button class="btn" @click="nextSameSong"
+                  :disabled="sameSongList.length <= 1">
+            Same song ({{ sameSongList.length }})
+          </button>
+          <button v-if="source === 'chunk'" class="btn" @click="nextSameSf"
+                  :disabled="sameSfList.length <= 1">
+            Same SF ({{ sameSfList.length }})
+          </button>
         </div>
       </div>
 
@@ -81,7 +91,7 @@
       </button>
       <span class="time-display">{{ formatTime(playPos) }} / {{ formatTime(duration) }}</span>
       <span v-if="!audioReady && selectedFile" class="loading-badge">loading audio…</span>
-      <span class="help">r random · c chunk/real · Space play · i infer</span>
+      <span class="help">r rand · n/p next/prev · b back · s song · f SF · c src · Space play · i infer</span>
     </div>
 
   </div>
@@ -104,6 +114,11 @@ const selectedFile = ref('')
 const statusMsg    = ref('')
 const inferError   = ref(false)
 const inferRunning = ref(false)
+
+// history — separate per source, max 25 entries; top = current file
+const historyChunk = ref([])
+const historyTest  = ref([])
+let   skipHistory  = false          // set true before programmatic file changes that shouldn't push
 
 // label data
 const barTimes    = ref([])         // from .bars
@@ -142,6 +157,28 @@ const epochsForTag = computed(() => {
   return allEpochs.value[selectedTag.value] ?? []
 })
 
+// Chunk name format: midi_part__sf_part__NNN  (split on '__')
+function parseStem(stem) {
+  const parts = stem.split('__')
+  if (parts.length >= 3) return { song: parts[0], sf: parts[parts.length - 2] }
+  if (parts.length === 2) return { song: parts[0], sf: null }
+  return { song: stem, sf: null }
+}
+
+const sameSongList = computed(() => {
+  if (!selectedFile.value) return []
+  const { song } = parseStem(selectedFile.value)
+  return fileList.value.filter(f => parseStem(f).song === song)
+})
+
+// Soundfont grouping only meaningful for MIDI chunks
+const sameSfList = computed(() => {
+  if (!selectedFile.value || source.value !== 'chunk') return []
+  const { sf } = parseStem(selectedFile.value)
+  if (!sf) return []
+  return fileList.value.filter(f => parseStem(f).sf === sf)
+})
+
 // ── Watchers ──────────────────────────────────────────────────────────────────
 
 watch(source, () => {
@@ -154,7 +191,16 @@ watch(selectedTag, tag => {
 })
 
 watch(selectedFile, file => {
-  if (file) loadFile(file)
+  if (!file) return
+  if (!skipHistory) {
+    const h = source.value === 'chunk' ? historyChunk.value : historyTest.value
+    if (h[h.length - 1] !== file) {
+      h.push(file)
+      if (h.length > 25) h.shift()
+    }
+  }
+  skipHistory = false
+  loadFile(file)
 })
 
 // ── API helpers ───────────────────────────────────────────────────────────────
@@ -481,6 +527,46 @@ function randomFile() {
   selectedFile.value = list[Math.floor(Math.random() * list.length)]
 }
 
+function nextInList() {
+  const list = fileList.value
+  if (!list.length) return
+  const idx = list.indexOf(selectedFile.value)
+  selectedFile.value = list[(idx + 1) % list.length]
+}
+
+function prevInList() {
+  const list = fileList.value
+  if (!list.length) return
+  const idx = list.indexOf(selectedFile.value)
+  selectedFile.value = list[(idx - 1 + list.length) % list.length]
+}
+
+function goBack() {
+  const h = (source.value === 'chunk' ? historyChunk : historyTest).value
+  if (h.length < 2) return
+  h.pop()                        // discard current
+  skipHistory = true
+  selectedFile.value = h[h.length - 1]
+}
+
+function copyName() {
+  if (selectedFile.value) navigator.clipboard.writeText(selectedFile.value)
+}
+
+function nextSameSong() {
+  const list = sameSongList.value
+  if (list.length <= 1) return
+  const cur = list.indexOf(selectedFile.value)
+  selectedFile.value = list[(cur + 1) % list.length]
+}
+
+function nextSameSf() {
+  const list = sameSfList.value
+  if (list.length <= 1) return
+  const cur = list.indexOf(selectedFile.value)
+  selectedFile.value = list[(cur + 1) % list.length]
+}
+
 function formatTime(s) {
   if (!s) return '0:00'
   const m = Math.floor(s / 60)
@@ -491,18 +577,29 @@ function formatTime(s) {
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
 
 function onKeyDown(e) {
+  // Don't steal keys from focused form elements
+  const tag = document.activeElement?.tagName
+  if (tag === 'SELECT' || tag === 'INPUT' || tag === 'TEXTAREA') return
+
   if (e.key === 'r') {
-    e.preventDefault()
-    randomFile()
+    e.preventDefault(); randomFile()
+  } else if (e.key === 'n') {
+    e.preventDefault(); nextInList()
+  } else if (e.key === 'p') {
+    e.preventDefault(); prevInList()
+  } else if (e.key === 'b' || e.key === 'Backspace') {
+    e.preventDefault(); goBack()
+  } else if (e.key === 's') {
+    e.preventDefault(); nextSameSong()
+  } else if (e.key === 'f') {
+    e.preventDefault(); nextSameSf()
   } else if (e.key === 'c') {
     e.preventDefault()
     source.value = source.value === 'chunk' ? 'test' : 'chunk'
   } else if (e.key === ' ') {
-    e.preventDefault()
-    togglePlay()
+    e.preventDefault(); togglePlay()
   } else if (e.key === 'i') {
-    e.preventDefault()
-    runInfer()
+    e.preventDefault(); runInfer()
   }
 }
 
