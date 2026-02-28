@@ -27,7 +27,7 @@ import subprocess
 import librosa
 import librosa.feature.rhythm   # explicit import needed for lazy-loader in librosa 0.10+
 import numpy as np
-from flask import Flask, abort, jsonify, request, send_file
+from flask import Flask, Response, abort, jsonify, request, send_file
 from madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor
 
 # Madmom processors are expensive to instantiate (loads model weights from disk).
@@ -234,6 +234,13 @@ def _load_song_data(filepath: str) -> dict | None:
     except Exception as exc:
         print(f'  Load error ({name}): {exc}')
         return None
+    duration_s = len(audio) / CHUNK_SR
+    if duration_s < 60:
+        print(f'  Too short ({duration_s:.0f}s), skipping')
+        return None
+    if duration_s > 900:
+        print(f'  Too long ({duration_s:.0f}s), skipping')
+        return None
     try:
         if _args is not None and _args.librosa:
             segments = _detect_beats_librosa(audio)
@@ -404,13 +411,19 @@ def api_action():
             payload_segs = data.get('segments', [])
             if not payload_segs:
                 return jsonify({'error': 'segments missing'}), 400
-            stem = Path(_state['_filepath']).stem
-            n = process_audio_segmented(
-                _current_audio, payload_segs, stem,
-                str(_out_path), _args.chunks_per_song, _args.pitch_range,
-                overwrite=False,
-            )
-            print(f'  Saved {n} chunks for {stem}')
+            # Capture refs now — _advance() will replace _current_audio
+            audio_snap = _current_audio
+            stem       = Path(_state['_filepath']).stem
+            out_path   = str(_out_path)
+            n_chunks   = _args.chunks_per_song
+            pitch_rng  = _args.pitch_range
+            def _chunk_worker():
+                n = process_audio_segmented(
+                    audio_snap, payload_segs, stem,
+                    out_path, n_chunks, pitch_rng, overwrite=False,
+                )
+                print(f'  Saved {n} chunks for {stem}')
+            threading.Thread(target=_chunk_worker, daemon=True).start()
 
     elif act == 'skip':
         print(f'  Skipped {_state.get("filename", "")}')
@@ -424,6 +437,21 @@ def serve_audio(token):
     fp = _token_to_file.get(token)
     if not fp:
         abort(404)
+    ext = Path(fp).suffix.lower()
+    # WAV and FLAC: transcode to OGG Vorbis on the fly (no temp file)
+    if ext in {'.wav', '.flac', '.aiff', '.aif'}:
+        cmd = [
+            'ffmpeg', '-v', 'warning',
+            '-i', fp,
+            '-ac', '1', '-c:a', 'libvorbis', '-qscale:a', '5',
+            '-f', 'ogg', 'pipe:1',
+        ]
+        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if proc.returncode != 0:
+            print(f'[serve_audio] ffmpeg transcode failed: {proc.stderr.decode()[:200]}')
+            abort(500)
+        return Response(proc.stdout, mimetype='audio/ogg')
+    # MP3, OGG, M4A, AAC — serve directly, browser handles these natively
     mime = mimetypes.guess_type(fp)[0] or 'application/octet-stream'
     return send_file(fp, mimetype=mime, conditional=True)
 
