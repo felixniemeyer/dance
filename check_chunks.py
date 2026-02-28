@@ -3,9 +3,9 @@ Evaluate a trained model on every chunk individually and report per-chunk loss.
 Useful for finding bad labels, corrupt audio, or outliers in the dataset.
 
 Usage:
-    python check_chunks.py checkpoints/gru_mel_no_anticipation/100.pt chunks/fv1_v0
-    python check_chunks.py checkpoints/gru_mel_no_anticipation/100.pt chunks/fv1_v0 --top 30
-    python check_chunks.py checkpoints/gru_mel_no_anticipation/100.pt chunks/fv1_v0 --csv out.csv
+    python check_chunks.py checkpoints/gru_mel_no_anticipation/100.pt data/chunks/v3
+    python check_chunks.py checkpoints/gru_mel_no_anticipation/100.pt data/chunks/v3 --top 30
+    python check_chunks.py checkpoints/gru_mel_no_anticipation/100.pt data/chunks/v3 --csv out.csv
 """
 
 import argparse
@@ -18,7 +18,7 @@ import numpy as np
 
 import config
 from models.selector import loadModel
-from dancer_data import load_phase_labels
+from dancer_data import load_bar_starts, compute_labels
 
 parser = argparse.ArgumentParser()
 parser.add_argument('checkpoint', type=str)
@@ -33,16 +33,16 @@ model, _ = loadModel(args.checkpoint)
 model.to(device)
 model.eval()
 
-frame_size    = config.frame_size
-samplerate    = config.samplerate
+frame_size      = config.frame_size
+samplerate      = config.samplerate
 expected_frames = int(config.chunk_duration * samplerate) // frame_size
 expected_samples = expected_frames * frame_size
-warmup_frames = int(args.warmup_seconds / (frame_size / samplerate))
+warmup_frames   = int(args.warmup_seconds / (frame_size / samplerate))
 
 chunk_names = [
     f[:-4] for f in os.listdir(args.chunks_path)
     if f.endswith('.ogg')
-    and os.path.exists(os.path.join(args.chunks_path, f[:-4] + '.phase'))
+    and os.path.exists(os.path.join(args.chunks_path, f[:-4] + '.bars'))
 ]
 print(f'{len(chunk_names)} chunks found')
 
@@ -53,7 +53,7 @@ with torch.no_grad():
         print(f'\r{i+1}/{len(chunk_names)}  ', end='', flush=True)
 
         audio_path = os.path.join(args.chunks_path, name + '.ogg')
-        phase_path = os.path.join(args.chunks_path, name + '.phase')
+        bars_path  = os.path.join(args.chunks_path, name + '.bars')
 
         try:
             audio, sr = soundfile.read(audio_path, dtype='float32')
@@ -63,7 +63,8 @@ with torch.no_grad():
             continue
 
         try:
-            phase_labels = load_phase_labels(phase_path)
+            bar_starts = load_bar_starts(bars_path)
+            phase_labels, _ = compute_labels(bar_starts, expected_frames, frame_size, samplerate)
         except Exception as e:
             results.append((999.0, name, f'label error: {e}'))
             continue
@@ -80,14 +81,11 @@ with torch.no_grad():
         else:
             audio = audio[:expected_samples]
 
-        if phase_labels.shape[0] < expected_frames:
-            phase_labels = torch.nn.functional.pad(phase_labels, (0, expected_frames - phase_labels.shape[0]))
-
         frames = audio.reshape(1, expected_frames, frame_size).to(device)
         phase_labels = phase_labels[:expected_frames].unsqueeze(0).to(device)
 
         outputs, _ = model(frames)
-        preds = outputs[:, warmup_frames:, :2]
+        preds  = outputs[:, warmup_frames:, :2]
         labels = phase_labels[:, warmup_frames:]
 
         target_angles  = labels * 2 * torch.pi
@@ -107,7 +105,6 @@ for loss, name, note in results[:args.top]:
     flag = f'  ← {note}' if note else ''
     print(f'{loss:8.4f}  {name}{flag}')
 
-# summary stats
 losses = [r[0] for r in results if r[0] < 999.0]
 losses_arr = np.array(losses)
 print(f'\nTotal: {len(losses)} chunks evaluated')
@@ -117,7 +114,6 @@ print(f'p90:    {np.percentile(losses_arr, 90):.4f}')
 print(f'p99:    {np.percentile(losses_arr, 99):.4f}')
 print(f'Max:    {losses_arr.max():.4f}')
 
-# histogram buckets
 print('\nDistribution:')
 buckets = [0.0, 0.3, 0.5, 0.7, 0.9, 1.0, 1.1, 2.0]
 for lo, hi in zip(buckets, buckets[1:]):
