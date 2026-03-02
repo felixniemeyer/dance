@@ -53,6 +53,7 @@ parser.add_argument("--rate-loss-weight", type=float, default=0.1, help="weight 
 # misc
 parser.add_argument("-d", "--dataset-size", type=int, default=None, help="truncate dataset to this size. For test runs.")
 parser.add_argument("--num-workers", type=int, default=None, help="DataLoader worker count. Defaults to min(4, cpu_count-1).")
+parser.add_argument("--batch-delay", type=float, default=0.0, help="Sleep N seconds between batches. Use to throttle I/O and reduce peak power draw.")
 parser.add_argument("--summarize", action='store_true', help="don't log, show only summary at the end")
 parser.add_argument("--plot-loss", action='store_true', default=False, help="plot loss after training")
 
@@ -126,8 +127,9 @@ val_size = data_size - train_size
 train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
 
 num_workers = args.num_workers if args.num_workers is not None else min(4, max(1, os.cpu_count() - 1))
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=True, pin_memory=True, multiprocessing_context='fork')
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=True, pin_memory=True, multiprocessing_context='fork') if val_size > 0 else None
+pin_memory = num_workers > 0
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=num_workers > 0, pin_memory=pin_memory, multiprocessing_context='fork' if num_workers > 0 else None)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=num_workers > 0, pin_memory=pin_memory, multiprocessing_context='fork' if num_workers > 0 else None) if val_size > 0 else None
 
 # Load model from disk if it exists
 first_epoch = 0
@@ -281,6 +283,9 @@ for epoch in range(first_epoch, last_epoch):
         train_total_loss += loss.item()
         train_num_batches += 1
 
+        if args.batch_delay > 0:
+            time.sleep(args.batch_delay)
+
     train_loss = train_total_loss / train_num_batches
     train_rate_loss = train_rate_loss_total / train_num_batches
     val_loss = 0.0
@@ -325,6 +330,9 @@ for epoch in range(first_epoch, last_epoch):
 
                 total_loss += loss
                 total_batches += 1
+
+                if args.batch_delay > 0:
+                    time.sleep(args.batch_delay)
 
             val_loss = total_loss / total_batches
             val_rate_loss = val_rate_loss_total / total_batches

@@ -6,9 +6,8 @@ import math
 import os
 from bisect import bisect_right
 
-import subprocess
-
 import numpy as np
+import soundfile
 import torch
 
 from torch.utils.data import Dataset
@@ -93,12 +92,9 @@ class DanceDataset(Dataset):
         audio_file = os.path.join(chunk_dir, chunk_name + '.ogg')
         bars_file  = os.path.join(chunk_dir, chunk_name + '.bars')
 
-        result = subprocess.run(
-            ['ffmpeg', '-i', audio_file,
-             '-f', 'f32le', '-ac', '1', '-ar', str(self.samplerate), 'pipe:1'],
-            capture_output=True, check=True,
-        )
-        audio = torch.from_numpy(np.frombuffer(result.stdout, dtype=np.float32).copy())
+        audio, sr = soundfile.read(audio_file, dtype='float32')
+        assert sr == self.samplerate, f'sample rate mismatch: {sr} != {self.samplerate}'
+        audio = torch.from_numpy(audio)
         peak = audio.abs().max()
         if peak > 0:
             audio = audio / peak
