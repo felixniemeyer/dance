@@ -15,7 +15,12 @@
           <label class="radio-lbl">
             <input type="radio" v-model="source" value="test"
                    :disabled="testFiles.length === 0" />
-            Real-world ({{ testFiles.length }})
+            Test ({{ testFiles.length }})
+          </label>
+          <label class="radio-lbl">
+            <input type="radio" v-model="source" value="music"
+                   :disabled="musicFiles.length === 0" />
+            Music ({{ musicFiles.length }})
           </label>
         </div>
       </div>
@@ -126,6 +131,7 @@ import { computePeaks } from '../utils/audio.js'
 const source       = ref('chunk')
 const chunks       = ref([])
 const testFiles    = ref([])
+const musicFiles   = ref([])
 const tags         = ref([])
 const allEpochs    = ref({})        // { tag: [epochs…] }
 const selectedTag  = ref('')
@@ -174,7 +180,11 @@ const phaseCanvas = ref(null)
 
 // ── Derived ───────────────────────────────────────────────────────────────────
 
-const fileList = computed(() => source.value === 'chunk' ? chunks.value : testFiles.value)
+const fileList = computed(() => {
+  if (source.value === 'chunk') return chunks.value
+  if (source.value === 'music') return musicFiles.value
+  return testFiles.value
+})
 
 const epochsForTag = computed(() => {
   if (!selectedTag.value) return []
@@ -250,15 +260,17 @@ async function apiFetch(path) {
 
 async function loadCatalogue() {
   try {
-    const [c, t, cp] = await Promise.all([
+    const [c, t, m, cp] = await Promise.all([
       apiFetch('/chunks'),
       apiFetch('/test-files'),
+      apiFetch('/music-files').catch(() => ({ files: [] })),
       apiFetch('/checkpoints'),
     ])
-    chunks.value    = c.chunks  ?? []
-    testFiles.value = t.files   ?? []
-    tags.value      = cp.tags   ?? []
-    allEpochs.value = cp.epochs ?? {}
+    chunks.value      = c.chunks  ?? []
+    testFiles.value   = t.files   ?? []
+    musicFiles.value  = m.files   ?? []
+    tags.value        = cp.tags   ?? []
+    allEpochs.value   = cp.epochs ?? {}
 
     // Only set defaults if current selection is missing or empty
     if (!selectedTag.value || !tags.value.includes(selectedTag.value))
@@ -283,6 +295,7 @@ async function loadFile(file) {
   duration.value   = 0
   audioReady.value = false
   peakData = null
+  playOffset = 0
   stopAudio()
   drawAll()
 
@@ -293,7 +306,9 @@ async function loadFile(file) {
 
   const audioUrl = source.value === 'chunk'
     ? `/inspect/chunk-audio/${encodeURIComponent(file)}.ogg`
-    : `/inspect/test-audio/${encodeURIComponent(file)}`
+    : source.value === 'music'
+      ? `/inspect/music-audio/${file.split('/').map(encodeURIComponent).join('/')}`
+      : `/inspect/test-audio/${encodeURIComponent(file)}`
 
   const audioPromise = fetchAndDecodeAudio(audioUrl)
 
@@ -696,7 +711,8 @@ function onKeyDown(e) {
     e.preventDefault(); openDeleteDialog()
   } else if (e.key === 'c') {
     e.preventDefault()
-    source.value = source.value === 'chunk' ? 'test' : 'chunk'
+    const cycle = ['chunk', 'test', 'music']
+    source.value = cycle[(cycle.indexOf(source.value) + 1) % cycle.length]
   } else if (e.key === ' ') {
     e.preventDefault(); togglePlay()
   } else if (e.key === 'i') {

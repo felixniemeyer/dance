@@ -16,18 +16,18 @@ Production (serve built UI from Flask):
 
 import argparse
 import os
-import mimetypes
-import random
 import secrets
 import threading
 from pathlib import Path
 
 import subprocess
 
+from real_world_audio_utils import AUDIO_EXTENSIONS, make_audio_response, scan_audio_files
+
 import librosa
 import librosa.feature.rhythm   # explicit import needed for lazy-loader in librosa 0.10+
 import numpy as np
-from flask import Flask, Response, abort, jsonify, request, send_file
+from flask import Flask, abort, jsonify, request, send_file
 from madmom.features.beats import RNNBeatProcessor, DBNBeatTrackingProcessor
 
 # Madmom processors are expensive to instantiate (loads model weights from disk).
@@ -64,7 +64,6 @@ def _make_parser() -> argparse.ArgumentParser:
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
-AUDIO_EXTENSIONS = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac'}
 HOP_LENGTH = 512
 
 
@@ -437,23 +436,7 @@ def serve_audio(token):
     fp = _token_to_file.get(token)
     if not fp:
         abort(404)
-    ext = Path(fp).suffix.lower()
-    # WAV and FLAC: transcode to OGG Vorbis on the fly (no temp file)
-    if ext in {'.wav', '.flac', '.aiff', '.aif'}:
-        cmd = [
-            'ffmpeg', '-v', 'warning',
-            '-i', fp,
-            '-ac', '1', '-c:a', 'libvorbis', '-qscale:a', '5',
-            '-f', 'ogg', 'pipe:1',
-        ]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if proc.returncode != 0:
-            print(f'[serve_audio] ffmpeg transcode failed: {proc.stderr.decode()[:200]}')
-            abort(500)
-        return Response(proc.stdout, mimetype='audio/ogg')
-    # MP3, OGG, M4A, AAC — serve directly, browser handles these natively
-    mime = mimetypes.guess_type(fp)[0] or 'application/octet-stream'
-    return send_file(fp, mimetype=mime, conditional=True)
+    return make_audio_response(fp)
 
 
 # Serve the built Vite UI (production mode)
@@ -488,16 +471,10 @@ def main():
         if len(parts) == 2:
             done_stems.add(parts[0])
 
-    # Collect audio files — single os.walk pass instead of one rglob per extension
+    # Collect audio files — shuffled, no duration filter (checked on load)
     music_path = Path(_args.music_path)
-    _exts = {e.lower() for e in AUDIO_EXTENSIONS}
-    all_files: list[Path] = []
-    for dirpath, _, filenames in os.walk(music_path):
-        for fn in filenames:
-            if Path(fn).suffix.lower() in _exts:
-                all_files.append(Path(dirpath) / fn)
-    random.shuffle(all_files)
-    _files[:] = [str(f) for f in all_files if f.stem not in done_stems]
+    all_files = scan_audio_files(music_path)
+    _files[:] = [f for f in all_files if Path(f).stem not in done_stems]
 
     print(f'Found {len(all_files)} audio files; {len(_files)} left to annotate')
     if not _files:

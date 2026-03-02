@@ -230,27 +230,57 @@ def _aug_gradual(audio, bar_starts, start_s, f_start, f_end, n_semitones):
 
 # ── chunk generation ───────────────────────────────────────────────────────────
 
-def _make_chunk(audio, bar_starts, start_s, n_semitones):
-    """Pick a random augmentation mode and apply it. Returns (audio, rel_bars) or (None, None)."""
+def _sample_aug_params():
+    """
+    Sample augmentation mode and all its parameters.
+    Returns (mode, params_dict, source_seconds) where source_seconds is the
+    worst-case amount of source audio consumed starting from start_s.
+    Callers use this to derive max_start = song_dur - source_seconds so that
+    start points spread across the full track and augmentation never runs dry.
+    """
     mode = random.choices(TEMPO_MODES, weights=TEMPO_WEIGHTS, k=1)[0]
 
     if mode == 'none':
-        return _aug_none(audio, bar_starts, start_s, n_semitones)
+        return mode, {}, chunk_duration
 
     if mode == 'uniform':
         f = random.uniform(0.75, 1.33)
-        return _aug_uniform(audio, bar_starts, start_s, f, n_semitones)
+        return mode, {'f': f}, chunk_duration * f
 
     if mode == 'sudden_jump':
         f = random.uniform(0.5, 2.0)
-        return _aug_sudden_jump(audio, bar_starts, start_s, f, n_semitones)
+        # source = t_split + (chunk_duration - t_split) * f
+        # worst case over t_split ∈ [6, 26]:
+        #   f >= 1 → minimise t_split (6):  6 + (chunk_duration-6)*f
+        #   f <  1 → maximise t_split (26): 26 + (chunk_duration-26)*f
+        if f >= 1.0:
+            src = 6 + (chunk_duration - 6) * f
+        else:
+            src = 26 + (chunk_duration - 26) * f
+        return mode, {'f': f}, src
 
     if mode == 'gradual':
         f_start = random.uniform(0.8, 1.2)
         f_end   = random.uniform(0.8, 1.2)
-        return _aug_gradual(audio, bar_starts, start_s, f_start, f_end, n_semitones)
+        # source = chunk_duration * mean(fs); linear interp → mean = (f_start+f_end)/2
+        src = chunk_duration * (f_start + f_end) / 2
+        return mode, {'f_start': f_start, 'f_end': f_end}, src
 
+    return 'none', {}, chunk_duration
+
+
+def _apply_aug(audio, bar_starts, start_s, n_semitones, mode, params):
+    """Apply pre-sampled augmentation. Returns (chunk_audio, rel_bars) or (None, None)."""
+    if mode == 'none':
+        return _aug_none(audio, bar_starts, start_s, n_semitones)
+    if mode == 'uniform':
+        return _aug_uniform(audio, bar_starts, start_s, params['f'], n_semitones)
+    if mode == 'sudden_jump':
+        return _aug_sudden_jump(audio, bar_starts, start_s, params['f'], n_semitones)
+    if mode == 'gradual':
+        return _aug_gradual(audio, bar_starts, start_s, params['f_start'], params['f_end'], n_semitones)
     return None, None
+
 
 
 def process_audio(audio, bar_starts, stem, out_path, n_chunks, pitch_range=2.0, overwrite=False):
@@ -270,14 +300,12 @@ def process_audio(audio, bar_starts, stem, out_path, n_chunks, pitch_range=2.0, 
     written = 0
 
     for i in range(n_chunks):
-        # Leave enough source headroom for worst-case sudden_jump (f=2, t_split=26 → ~58s)
-        max_start = max(0.0, song_dur - chunk_duration * 2.5)
-        start_s   = random.uniform(0.0, max_start)
-
-        # Single pitch shift value for the whole chunk
+        mode, params, source_secs = _sample_aug_params()
+        max_start   = max(0.0, song_dur - source_secs)
+        start_s     = random.uniform(0.0, max_start)
         n_semitones = random.uniform(-pitch_range, pitch_range)
 
-        chunk_audio, rel_bars = _make_chunk(audio, bar_starts, start_s, n_semitones)
+        chunk_audio, rel_bars = _apply_aug(audio, bar_starts, start_s, n_semitones, mode, params)
         if chunk_audio is None:
             continue
 
@@ -379,12 +407,13 @@ def process_audio_segmented(audio, segments, stem, out_path, n_chunks,
         )
 
         for _ in range(n_run):
-            max_start = max(run_start, run_end - chunk_duration * 2.5)
-            start_s   = random.uniform(run_start, max_start)
-
+            mode, params, source_secs = _sample_aug_params()
+            max_start   = max(run_start, run_end - source_secs)
+            start_s     = random.uniform(run_start, max_start)
             n_semitones = random.uniform(-pitch_range, pitch_range)
-            chunk_audio, rel_bars = _make_chunk(
-                audio, run_bar_starts, start_s, n_semitones)
+
+            chunk_audio, rel_bars = _apply_aug(
+                audio, run_bar_starts, start_s, n_semitones, mode, params)
             if chunk_audio is None:
                 continue
 

@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import os
+import random
 import subprocess
 
 import numpy as np
@@ -24,12 +25,16 @@ from flask import Flask, abort, jsonify, request, send_file
 
 import config
 from models.selector import loadModel
+from real_world_audio_utils import is_valid_duration, make_audio_response, scan_audio_files
 
 # ── CLI args ───────────────────────────────────────────────────────────────────
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--chunks-path',      type=str, required=True)
 parser.add_argument('--test-data-path',   type=str, default='realworld-test-data')
+parser.add_argument('--music-path',       type=str, default=None,
+                    help='Root folder of real-world audio library (scanned recursively, '
+                         '1000 random tracks sampled, duration-filtered)')
 parser.add_argument('--checkpoints-path', type=str, default='checkpoints')
 parser.add_argument('--port',             type=int, default=8051)
 parser.add_argument('--host',             default='0.0.0.0')
@@ -77,6 +82,32 @@ def find_checkpoints(path):
     for tag in tags:
         tag_epochs[tag] = sorted(tag_epochs[tag], reverse=True)
     return tags, tag_epochs
+
+# ── Music library (optional --music-path) ──────────────────────────────────────
+
+# relative_path → absolute_path, populated at startup
+_music_files: dict[str, str] = {}
+
+
+def scan_music_library(music_path: str, sample: int = 1000) -> dict[str, str]:
+    """Scan music-path, pick up to `sample` random duration-filtered tracks.
+    Returns {relative_path: absolute_path}."""
+    abs_paths = scan_audio_files(music_path)
+    random.shuffle(abs_paths)
+    root = music_path.rstrip('/')
+    result = {}
+    for ap in abs_paths:
+        if len(result) >= sample:
+            break
+        if not is_valid_duration(ap):
+            continue
+        try:
+            rel = os.path.relpath(ap, root)
+        except ValueError:
+            rel = os.path.basename(ap)
+        result[rel] = ap
+    return result
+
 
 # ── Audio loading ──────────────────────────────────────────────────────────────
 
@@ -219,6 +250,19 @@ def test_audio(filename):
     return send_file(path, mimetype=mime)
 
 
+@app.route('/music-files')
+def list_music_files():
+    return jsonify({'files': sorted(_music_files.keys())})
+
+
+@app.route('/music-audio/<path:relpath>')
+def music_audio(relpath):
+    abs_path = _music_files.get(relpath)
+    if not abs_path or not os.path.exists(abs_path):
+        abort(404)
+    return make_audio_response(abs_path)
+
+
 @app.route('/delete', methods=['POST', 'OPTIONS'])
 def delete_chunks():
     if request.method == 'OPTIONS':
@@ -275,8 +319,12 @@ def infer():
         audio_path = os.path.join(args.chunks_path, file + '.ogg')
     elif source == 'test':
         audio_path = os.path.join(args.test_data_path, file)
+    elif source == 'music':
+        audio_path = _music_files.get(file)
+        if not audio_path:
+            return jsonify({'error': f'music file not found: {file}'}), 404
     else:
-        return jsonify({'error': 'source must be chunk or test'}), 400
+        return jsonify({'error': 'source must be chunk, test, or music'}), 400
     if not os.path.exists(audio_path):
         return jsonify({'error': f'file not found: {audio_path}'}), 404
     try:
@@ -288,13 +336,21 @@ def infer():
 
 if __name__ == '__main__':
     import socket
-    ip     = socket.gethostbyname(socket.gethostname())
-    chunks = find_chunks(args.chunks_path)
-    test_f = find_test_files(args.test_data_path)
+    ip      = socket.gethostbyname(socket.gethostname())
+    chunks  = find_chunks(args.chunks_path)
+    test_f  = find_test_files(args.test_data_path)
     tags, _ = find_checkpoints(args.checkpoints_path)
+
+    if args.music_path:
+        print(f'Scanning music library: {args.music_path} …')
+        _music_files.update(scan_music_library(args.music_path))
+        print(f'  → {len(_music_files)} tracks selected')
+
     print(f'\nDance Inspector API')
     print(f'  chunks:      {args.chunks_path}  ({len(chunks)} chunks)')
     print(f'  test data:   {args.test_data_path}  ({len(test_f)} files)')
+    if args.music_path:
+        print(f'  music:       {args.music_path}  ({len(_music_files)} tracks)')
     print(f'  checkpoints: {args.checkpoints_path}  ({len(tags)} tags)')
     print(f'  http://{ip}:{args.port}\n')
     app.run(host=args.host, port=args.port, debug=False, threaded=True)

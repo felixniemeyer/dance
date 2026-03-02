@@ -6,8 +6,9 @@ import math
 import os
 from bisect import bisect_right
 
+import subprocess
+
 import numpy as np
-import soundfile
 import torch
 
 from torch.utils.data import Dataset
@@ -72,27 +73,32 @@ class DanceDataset(Dataset):
         self.frame_size = frame_size
         self.samplerate = samplerate
 
-        filenames = [f[:-4] for f in os.listdir(data_path) if f.endswith('.ogg')]
-        self.chunk_names = [
-            fn for fn in filenames
-            if os.path.exists(os.path.join(data_path, fn + '.bars'))
-        ]
+        # collect (relative_stem, abs_dir) for every .ogg that has a matching .bars
+        self.chunk_names = []  # list of (stem, directory) pairs
+        for dirpath, _, files in os.walk(data_path):
+            for f in files:
+                if f.endswith('.ogg'):
+                    stem = f[:-4]
+                    ogg_path  = os.path.join(dirpath, f)
+                    bars_path = os.path.join(dirpath, stem + '.bars')
+                    if os.path.exists(bars_path) and os.path.getsize(ogg_path) > 0:
+                        self.chunk_names.append((stem, dirpath))
 
     def __len__(self):
         return len(self.chunk_names)
 
     def __getitem__(self, index):
-        chunk_name = self.chunk_names[index]
+        chunk_name, chunk_dir = self.chunk_names[index]
 
-        audio_file = os.path.join(self.path, chunk_name + '.ogg')
-        bars_file  = os.path.join(self.path, chunk_name + '.bars')
+        audio_file = os.path.join(chunk_dir, chunk_name + '.ogg')
+        bars_file  = os.path.join(chunk_dir, chunk_name + '.bars')
 
-        audio, sr = soundfile.read(audio_file, dtype='float32')
-        assert sr == self.samplerate, f'sample rate mismatch: {sr} != {self.samplerate}'
-
-        if audio.ndim == 2:
-            audio = audio.mean(axis=1)
-        audio = torch.from_numpy(audio)
+        result = subprocess.run(
+            ['ffmpeg', '-i', audio_file,
+             '-f', 'f32le', '-ac', '1', '-ar', str(self.samplerate), 'pipe:1'],
+            capture_output=True, check=True,
+        )
+        audio = torch.from_numpy(np.frombuffer(result.stdout, dtype=np.float32).copy())
         peak = audio.abs().max()
         if peak > 0:
             audio = audio / peak

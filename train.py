@@ -45,6 +45,9 @@ parser.add_argument("-rd", "--learning-rate-decay", type=float, default=0.95, he
 parser.add_argument("-b", "--batch-size", type=int, default=4, help="batch size")
 parser.add_argument("--warmup-seconds", type=float, default=8.0, help="ignore loss in first N seconds of each sequence")
 parser.add_argument("--fft-frames", type=int, default=None, help="mel frontend: FFT window in frames (overrides model default)")
+parser.add_argument("--n-mels", type=int, default=None, help="mel frontend: number of mel bins (overrides model default)")
+parser.add_argument("--n-layers", type=int, default=None, help="GRU: number of layers (overrides model default)")
+parser.add_argument("--hidden", type=int, default=None, help="GRU: hidden state size (overrides model default)")
 parser.add_argument("--rate-loss-weight", type=float, default=0.1, help="weight for phase_rate MSE loss term (0 disables)")
 
 # misc
@@ -92,6 +95,12 @@ batch_size = args.batch_size
 model_kwargs = {}
 if args.fft_frames is not None:
     model_kwargs['fft_frames'] = args.fft_frames
+if args.n_mels is not None:
+    model_kwargs['n_mels'] = args.n_mels
+if args.n_layers is not None:
+    model_kwargs['n_layers'] = args.n_layers
+if args.hidden is not None:
+    model_kwargs['hidden'] = args.hidden
 
 # Initialize the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
