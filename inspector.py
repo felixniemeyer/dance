@@ -25,7 +25,7 @@ from flask import Flask, abort, jsonify, request, send_file
 
 import config
 from models.selector import loadModel
-from real_world_audio_utils import is_valid_duration, make_audio_response, scan_audio_files
+from real_world_audio_utils import make_audio_response, scan_audio_files
 
 # ── CLI args ───────────────────────────────────────────────────────────────────
 
@@ -89,18 +89,13 @@ def find_checkpoints(path):
 _music_files: dict[str, str] = {}
 
 
-def scan_music_library(music_path: str, sample: int = 1000) -> dict[str, str]:
-    """Scan music-path, pick up to `sample` random duration-filtered tracks.
-    Returns {relative_path: absolute_path}."""
+def scan_music_library(music_path: str) -> dict[str, str]:
+    """Scan music-path and return all audio files from cache.
+    Returns {relative_path: absolute_path}. No duration filtering at startup."""
     abs_paths = scan_audio_files(music_path)
-    random.shuffle(abs_paths)
     root = music_path.rstrip('/')
     result = {}
     for ap in abs_paths:
-        if len(result) >= sample:
-            break
-        if not is_valid_duration(ap):
-            continue
         try:
             rel = os.path.relpath(ap, root)
         except ValueError:

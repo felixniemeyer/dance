@@ -40,7 +40,7 @@
       </template>
     </div>
 
-    <pre class="help">h/l ±sub-beat · j/k ±bar · Space loop · p free play · s/d subdivide · 0-9 bpb · Shift+0-9 note · c cut · x skip · Enter accept · Esc skip song</pre>
+    <pre class="help">h/l ±sub-beat · j/k ±bar · Shift+j/k ±10 bars · Space loop · p free play · s/d subdivide · 0-9 bpb · Shift+0-9 note · c cut · x skip · Enter accept · Esc skip song</pre>
   </div>
 </template>
 
@@ -743,14 +743,16 @@ function onKeyDown(e) {
     beatIdx.value = Math.min(sb.length - 1, beatIdx.value + 1)
     updateBeatOffset(); scrollToBar(); updateLoop(); draw()
 
-  } else if (e.key === 'j') {
+  } else if (e.key === 'j' || e.key === 'J') {
     e.preventDefault()
-    if (beatIdx.value < sb.length - 1) beatIdx.value = Math.min(sb.length - 1, beatIdx.value + effN)
+    const stepJ = effN * (e.shiftKey ? 10 : 1)
+    if (beatIdx.value < sb.length - 1) beatIdx.value = Math.min(sb.length - 1, beatIdx.value + stepJ)
     updateBeatOffset(); scrollToBar(); updateLoop(); draw()
 
-  } else if (e.key === 'k') {
+  } else if (e.key === 'k' || e.key === 'K') {
     e.preventDefault()
-    if (beatIdx.value > 0) beatIdx.value -= effN
+    const stepK = effN * (e.shiftKey ? 10 : 1)
+    if (beatIdx.value > 0) beatIdx.value = Math.max(0, beatIdx.value - stepK)
     updateBeatOffset(); scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 's') {
