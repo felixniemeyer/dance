@@ -190,6 +190,20 @@ const barExtents = computed(() => {
   return [getT(off), getT(off + n)]
 })
 
+// Average bar duration across all segments — used for stable zoom in scrollToBar.
+const avgBarDur = computed(() => {
+  const segs = segments.value
+  if (!segs.length) return 2
+  const durs = []
+  for (const seg of segs) {
+    const sb = buildSegSubdividedBeats(seg)
+    const n  = seg.bpb * seg.subdivision
+    for (let i = 0; i + n < sb.length; i += n) durs.push(sb[i + n] - sb[i])
+  }
+  if (!durs.length) return 2
+  return durs.reduce((a, b) => a + b, 0) / durs.length
+})
+
 // ── Status ────────────────────────────────────────────────────────────────────
 
 const statusInfo = computed(() => {
@@ -457,9 +471,8 @@ function scrollToBar() {
   const sb = subdividedBeats.value, bi = beatIdx.value
   if (!sb.length || bi >= sb.length) return
   const [barS, barE] = barExtents.value
-  const barDur  = barE - barS
-  const barMid  = barS + barDur / 2
-  const viewDur = barDur / BAR_FRAC
+  const barMid  = (barS + barE) / 2
+  const viewDur = avgBarDur.value / BAR_FRAC
   viewStart.value = barMid - viewDur / 2
   viewEnd.value   = barMid + viewDur / 2
 }
