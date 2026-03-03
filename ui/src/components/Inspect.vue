@@ -13,11 +13,6 @@
             Chunks ({{ chunks.length }})
           </label>
           <label class="radio-lbl">
-            <input type="radio" v-model="source" value="test"
-                   :disabled="testFiles.length === 0" />
-            Test ({{ testFiles.length }})
-          </label>
-          <label class="radio-lbl">
             <input type="radio" v-model="source" value="music"
                    :disabled="musicFiles.length === 0" />
             Music ({{ musicFiles.length }})
@@ -99,13 +94,13 @@
 
     <!-- ── Waveform canvas ───────────────────────────────────────────────── -->
     <div class="canvas-wrap canvas-wave">
-      <canvas ref="waveCanvas" class="cv" />
+      <canvas ref="waveCanvas" class="cv" :class="{ 'cv-clickable': audioReady }" @click="onWaveClick" />
       <div class="cv-label">Waveform</div>
     </div>
 
     <!-- ── Phase canvas ─────────────────────────────────────────────────── -->
     <div class="canvas-wrap canvas-phase">
-      <canvas ref="phaseCanvas" class="cv" @click="onPhaseClick" />
+      <canvas ref="phaseCanvas" class="cv" :class="{ 'cv-clickable': audioReady }" @click="onPhaseClick" />
       <div class="cv-label">Bar phase</div>
     </div>
 
@@ -130,7 +125,6 @@ import { computePeaks } from '../utils/audio.js'
 
 const source       = ref('chunk')
 const chunks       = ref([])
-const testFiles    = ref([])
 const musicFiles   = ref([])
 const tags         = ref([])
 const allEpochs    = ref({})        // { tag: [epochs…] }
@@ -141,9 +135,9 @@ const statusMsg    = ref('')
 const inferError   = ref(false)
 const inferRunning = ref(false)
 
-// history — separate per source, max 25 entries; top = current file
+// history per source, max 25 entries; top = current file
 const historyChunk = ref([])
-const historyTest  = ref([])
+const historyMusic = ref([])
 let   skipHistory  = false          // set true before programmatic file changes that shouldn't push
 
 // delete dialog
@@ -181,9 +175,8 @@ const phaseCanvas = ref(null)
 // ── Derived ───────────────────────────────────────────────────────────────────
 
 const fileList = computed(() => {
-  if (source.value === 'chunk') return chunks.value
   if (source.value === 'music') return musicFiles.value
-  return testFiles.value
+  return chunks.value
 })
 
 const epochsForTag = computed(() => {
@@ -238,7 +231,7 @@ watch(selectedTag, tag => {
 watch(selectedFile, file => {
   if (!file) return
   if (!skipHistory) {
-    const h = source.value === 'chunk' ? historyChunk.value : historyTest.value
+    const h = source.value === 'music' ? historyMusic.value : historyChunk.value
     if (h[h.length - 1] !== file) {
       h.push(file)
       if (h.length > 25) h.shift()
@@ -260,14 +253,12 @@ async function apiFetch(path) {
 
 async function loadCatalogue() {
   try {
-    const [c, t, m, cp] = await Promise.all([
+    const [c, m, cp] = await Promise.all([
       apiFetch('/chunks'),
-      apiFetch('/test-files'),
       apiFetch('/music-files').catch(() => ({ files: [] })),
       apiFetch('/checkpoints'),
     ])
     chunks.value      = c.chunks  ?? []
-    testFiles.value   = t.files   ?? []
     musicFiles.value  = m.files   ?? []
     tags.value        = cp.tags   ?? []
     allEpochs.value   = cp.epochs ?? {}
@@ -304,11 +295,9 @@ async function loadFile(file) {
     ? apiFetch(`/chunk-data/${encodeURIComponent(file)}`)
     : Promise.resolve(null)
 
-  const audioUrl = source.value === 'chunk'
-    ? `/inspect/chunk-audio/${encodeURIComponent(file)}.ogg`
-    : source.value === 'music'
-      ? `/inspect/music-audio/${file.split('/').map(encodeURIComponent).join('/')}`
-      : `/inspect/test-audio/${encodeURIComponent(file)}`
+  const audioUrl = source.value === 'music'
+    ? `/inspect/music-audio/${file.split('/').map(encodeURIComponent).join('/')}`
+    : `/inspect/chunk-audio/${encodeURIComponent(file)}.ogg`
 
   const audioPromise = fetchAndDecodeAudio(audioUrl)
 
@@ -552,21 +541,29 @@ function drawPhaseSignal(ctx, times, phases, color, W, H, dur) {
   ctx.stroke()
 }
 
-// ── Seek by clicking phase canvas ─────────────────────────────────────────────
+// ── Seek by clicking either canvas ────────────────────────────────────────────
+
+function seekTo(t) {
+  if (!decodedBuffer) return
+  playOffset = Math.max(0, Math.min(t, duration.value))
+  if (isPlaying.value) {
+    stopAudio()
+    togglePlay()   // restart from new position
+  } else {
+    drawAll()      // just update playhead
+  }
+}
+
+function onWaveClick(e) {
+  if (!duration.value) return
+  const rect = waveCanvas.value.getBoundingClientRect()
+  seekTo(((e.clientX - rect.left) / rect.width) * duration.value)
+}
 
 function onPhaseClick(e) {
   if (!duration.value) return
-  const el   = phaseCanvas.value
-  const rect = el.getBoundingClientRect()
-  const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-  const t    = frac * duration.value
-  playOffset = t
-  if (isPlaying.value) {
-    stopAudio()
-    togglePlay()
-  } else {
-    drawAll()
-  }
+  const rect = phaseCanvas.value.getBoundingClientRect()
+  seekTo(((e.clientX - rect.left) / rect.width) * duration.value)
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -592,7 +589,7 @@ function prevInList() {
 }
 
 function goBack() {
-  const h = (source.value === 'chunk' ? historyChunk : historyTest).value
+  const h = (source.value === 'music' ? historyMusic : historyChunk).value
   if (h.length < 2) return
   h.pop()                        // discard current
   skipHistory = true
@@ -711,7 +708,7 @@ function onKeyDown(e) {
     e.preventDefault(); openDeleteDialog()
   } else if (e.key === 'c') {
     e.preventDefault()
-    const cycle = ['chunk', 'test', 'music']
+    const cycle = ['chunk', 'music']
     source.value = cycle[(cycle.indexOf(source.value) + 1) % cycle.length]
   } else if (e.key === ' ') {
     e.preventDefault(); togglePlay()
@@ -864,6 +861,7 @@ onUnmounted(() => {
   width: 100%;
   height: 100%;
 }
+.cv-clickable { cursor: pointer }
 
 .cv-label {
   position: absolute;

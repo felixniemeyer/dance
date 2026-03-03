@@ -759,13 +759,15 @@ function onKeyDown(e) {
   } else if (e.key === 'j' || e.key === 'J') {
     e.preventDefault()
     const stepJ = effN * (e.shiftKey ? 10 : 1)
-    if (beatIdx.value < sb.length - 1) beatIdx.value = Math.min(sb.length - 1, beatIdx.value + stepJ)
+    const nextJ = beatIdx.value + stepJ
+    if (nextJ < sb.length) beatIdx.value = nextJ
     updateBeatOffset(); scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 'k' || e.key === 'K') {
     e.preventDefault()
     const stepK = effN * (e.shiftKey ? 10 : 1)
-    if (beatIdx.value > 0) beatIdx.value = Math.max(0, beatIdx.value - stepK)
+    const prevK = beatIdx.value - stepK
+    if (prevK >= 0) beatIdx.value = prevK
     updateBeatOffset(); scrollToBar(); updateLoop(); draw()
 
   } else if (e.key === 's') {

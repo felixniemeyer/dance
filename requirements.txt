@@ -1,7 +1,9 @@
 mido==1.2.10
 soundfile
 numpy
+scipy
 matplotlib
+sounddevice
 onnx
 torch
 torchaudio

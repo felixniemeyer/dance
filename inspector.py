@@ -31,10 +31,8 @@ from real_world_audio_utils import make_audio_response, scan_audio_files
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--chunks-path',      type=str, required=True)
-parser.add_argument('--test-data-path',   type=str, default='realworld-test-data')
 parser.add_argument('--music-path',       type=str, default=None,
-                    help='Root folder of real-world audio library (scanned recursively, '
-                         '1000 random tracks sampled, duration-filtered)')
+                    help='Root folder of real-world audio library (scanned recursively)')
 parser.add_argument('--checkpoints-path', type=str, default='checkpoints')
 parser.add_argument('--port',             type=int, default=8051)
 parser.add_argument('--host',             default='0.0.0.0')
@@ -57,11 +55,6 @@ def find_chunks(path):
                 names.append(stem)
     return names
 
-
-def find_test_files(path):
-    if not os.path.isdir(path):
-        return []
-    return sorted(f for f in os.listdir(path) if Path(f).suffix.lower() in AUDIO_EXTS)
 
 
 def find_checkpoints(path):
@@ -207,11 +200,6 @@ def list_chunks():
     return jsonify({'chunks': find_chunks(args.chunks_path)})
 
 
-@app.route('/test-files')
-def list_test_files():
-    return jsonify({'files': find_test_files(args.test_data_path)})
-
-
 @app.route('/checkpoints')
 def list_checkpoints():
     tags, tag_epochs = find_checkpoints(args.checkpoints_path)
@@ -232,17 +220,6 @@ def chunk_audio(filename):
     if not os.path.exists(path):
         abort(404)
     return send_file(path, mimetype='audio/ogg')
-
-
-@app.route('/test-audio/<path:filename>')
-def test_audio(filename):
-    path = os.path.join(args.test_data_path, filename)
-    if not os.path.exists(path):
-        abort(404)
-    ext  = Path(filename).suffix.lower()
-    mime = {'.mp3': 'audio/mpeg', '.ogg': 'audio/ogg', '.wav': 'audio/wav',
-            '.flac': 'audio/flac', '.m4a': 'audio/mp4', '.aac': 'audio/aac'}.get(ext, 'audio/mpeg')
-    return send_file(path, mimetype=mime)
 
 
 @app.route('/music-files')
@@ -312,14 +289,12 @@ def infer():
         return jsonify({'error': 'tag and epoch required'}), 400
     if source == 'chunk':
         audio_path = os.path.join(args.chunks_path, file + '.ogg')
-    elif source == 'test':
-        audio_path = os.path.join(args.test_data_path, file)
     elif source == 'music':
         audio_path = _music_files.get(file)
         if not audio_path:
             return jsonify({'error': f'music file not found: {file}'}), 404
     else:
-        return jsonify({'error': 'source must be chunk, test, or music'}), 400
+        return jsonify({'error': 'source must be chunk or music'}), 400
     if not os.path.exists(audio_path):
         return jsonify({'error': f'file not found: {audio_path}'}), 404
     try:
@@ -333,17 +308,15 @@ if __name__ == '__main__':
     import socket
     ip      = socket.gethostbyname(socket.gethostname())
     chunks  = find_chunks(args.chunks_path)
-    test_f  = find_test_files(args.test_data_path)
     tags, _ = find_checkpoints(args.checkpoints_path)
 
     if args.music_path:
         print(f'Scanning music library: {args.music_path} …')
         _music_files.update(scan_music_library(args.music_path))
-        print(f'  → {len(_music_files)} tracks selected')
+        print(f'  → {len(_music_files)} tracks loaded')
 
     print(f'\nDance Inspector API')
     print(f'  chunks:      {args.chunks_path}  ({len(chunks)} chunks)')
-    print(f'  test data:   {args.test_data_path}  ({len(test_f)} files)')
     if args.music_path:
         print(f'  music:       {args.music_path}  ({len(_music_files)} tracks)')
     print(f'  checkpoints: {args.checkpoints_path}  ({len(tags)} tags)')
