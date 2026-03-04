@@ -16,6 +16,7 @@ Production (serve built UI from Flask):
 
 import argparse
 import json
+import logging
 import os
 import random
 import secrets
@@ -81,6 +82,7 @@ _state:         dict              = {'done': True}
 _args  = None
 _out_path: Path = None
 _annotations_path: Path = None
+_music_root: Path = None
 
 # ── Background preload ────────────────────────────────────────────────────────
 
@@ -266,7 +268,12 @@ def _load_song_data(filepath: str) -> dict | None:
 
 
 def _annotation_path_for(filepath: str) -> Path:
-    return _annotations_path / f'{Path(filepath).stem}.json'
+    fp = Path(filepath)
+    try:
+        rel = fp.relative_to(_music_root)
+    except Exception:
+        rel = Path(fp.name)
+    return (_annotations_path / rel).with_suffix('.json')
 
 
 def _load_annotation(filepath: str) -> dict | None:
@@ -296,7 +303,7 @@ def _save_annotation(filepath: str, segments: list[dict], chunks_per_song: int) 
         'segments': segments,
         'saved_at': datetime.now(timezone.utc).isoformat(),
     }
-    _annotations_path.mkdir(parents=True, exist_ok=True)
+    ap.parent.mkdir(parents=True, exist_ok=True)
     with ap.open('w', encoding='utf8') as f:
         json.dump(payload, f, ensure_ascii=True, indent=2)
 
@@ -435,6 +442,12 @@ def _public_state() -> dict:
 app = Flask(__name__)
 
 
+class _HealthEndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return '/health' not in msg
+
+
 @app.after_request
 def _cors(resp):
     resp.headers['Access-Control-Allow-Origin']  = '*'
@@ -525,10 +538,11 @@ def serve_ui(path):
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global _args, _out_path, _annotations_path
+    global _args, _out_path, _annotations_path, _music_root
     _args     = _make_parser().parse_args()
     _out_path = Path(_args.out_path)
     _annotations_path = Path(_args.annotations_path)
+    _music_root = Path(_args.music_path).resolve()
     _out_path.mkdir(parents=True, exist_ok=True)
     _annotations_path.mkdir(parents=True, exist_ok=True)
 
@@ -544,15 +558,22 @@ def main():
     # fresh random selection across the identified set every time.
     music_path = Path(_args.music_path)
     all_files = scan_audio_files(music_path)
-    annotated_stems = {p.stem for p in _annotations_path.glob('*.json')}
-    skip_stems = done_stems | annotated_stems
-    _files[:] = [f for f in all_files if Path(f).stem not in skip_stems]
+    annotated_count = 0
+    remaining_files = []
+    for f in all_files:
+        if Path(f).stem in done_stems:
+            continue
+        if _annotation_path_for(f).exists():
+            annotated_count += 1
+            continue
+        remaining_files.append(f)
+    _files[:] = remaining_files
     random.shuffle(_files)
 
     print(
         f'Found {len(all_files)} audio files; '
         f'{len(done_stems)} have chunks; '
-        f'{len(annotated_stems)} have annotations; '
+        f'{annotated_count} have annotations; '
         f'{len(_files)} left to annotate'
     )
     if not _files:
@@ -561,6 +582,7 @@ def main():
 
     _advance()   # load first file + start preloading second
     print(f'Starting backend → http://{_args.host}:{_args.port}')
+    logging.getLogger('werkzeug').addFilter(_HealthEndpointFilter())
     app.run(host=_args.host, port=_args.port, debug=False, threaded=True)
 
 

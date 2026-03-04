@@ -13,6 +13,7 @@ Usage:
 """
 
 import argparse
+import logging
 import os
 import random
 import subprocess
@@ -46,8 +47,6 @@ if argcomplete is not None:
 args = parser.parse_args()
 
 # ── Discovery ──────────────────────────────────────────────────────────────────
-
-AUDIO_EXTS = {'.ogg', '.mp3', '.wav', '.flac', '.m4a', '.aac'}
 
 
 def find_chunks(path):
@@ -189,6 +188,12 @@ def run_inference(ckpt_tag, ckpt_epoch, audio_path):
 app = Flask(__name__)
 
 
+class _HealthEndpointFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return '/health' not in msg
+
+
 @app.after_request
 def _cors(resp):
     resp.headers['Access-Control-Allow-Origin']  = '*'
@@ -328,4 +333,5 @@ if __name__ == '__main__':
         print(f'  music:       {args.music_path}  ({len(_music_files)} tracks)')
     print(f'  checkpoints: {args.checkpoints_path}  ({len(tags)} tags)')
     print(f'  http://{ip}:{args.port}\n')
+    logging.getLogger('werkzeug').addFilter(_HealthEndpointFilter())
     app.run(host=args.host, port=args.port, debug=False, threaded=True)

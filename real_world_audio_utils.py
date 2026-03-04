@@ -10,7 +10,10 @@ import random
 import subprocess
 from pathlib import Path
 
-AUDIO_EXTENSIONS = {'.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac'}
+AUDIO_EXTENSIONS = {
+    '.mp3', '.wav', '.flac', '.ogg', '.oga', '.opus', '.m4a', '.aac',
+    '.aif', '.aiff', '.wma', '.mp4', '.webm',
+}
 
 # Duration thresholds — skip short clips (<1 min) and DJ sets (>15 min)
 MIN_DURATION = 60
