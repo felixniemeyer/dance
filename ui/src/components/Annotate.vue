@@ -26,37 +26,24 @@
 
     <div class="status-live">
       <template v-if="!serverDone && !serverError">
-        <div class="chunk-control">
-          <button
-            class="chunk-btn"
-            :disabled="loading || chunksPerSong <= 1"
-            @click.stop="adjustChunks(-1)"
-            title="Decrease chunks for this track"
-          >-</button>
-          <span class="chunk-value">chunks {{ chunksPerSong }}</span>
-          <button
-            class="chunk-btn"
-            :disabled="loading"
-            @click.stop="adjustChunks(1)"
-            title="Increase chunks for this track"
-          >+</button>
-          <span v-if="chunksPerSong !== chunksPerSongDefault" class="badge badge-override">override</span>
-        </div>
         <span class="timesig">
           <span class="ts-num">{{ bpb }}</span>
+          <span class="ts-sep">/</span>
           <span class="ts-den">{{ bpd }}</span>
         </span>
         <span v-if="subdivision > 1" class="badge badge-subdiv">×{{ subdivision }}</span>
         <span v-if="isPlaying" class="badge" :class="loopMode ? 'badge-loop-on' : 'badge-loop-off'">{{ loopMode ? '⟳ loop' : '→ free' }}</span>
+        <span v-else class="badge badge-pause">⏸ pause</span>
         <span class="seg-status" :class="`seg-${currentSegment?.status ?? 'pending'}`">
           {{ currentSegment?.status ?? 'pending' }}
         </span>
         <span class="status-info">{{ statusInfo }}</span>
         <span v-if="digitBuf" class="badge badge-typing">{{ digitBuf }}…</span>
+        <span class="badge badge-chunks">chunks: {{ chunksPerSong }}</span>
       </template>
     </div>
 
-    <pre class="help">h/l ±sub-beat · j/k ±bar · Shift+j/k ±10 bars · Space loop · p free play · s/d subdivide · 0-9 bpb · Shift+0-9 note · c cut · x skip · Enter accept · Esc skip song</pre>
+    <pre class="help">h/l ±sub-beat · j/k ±bar · Shift+j/k ±10 bars · +/- chunks · = reset chunks · Space loop · p free play · s/d subdivide · 0-9 bpb · Shift+0-9 note · c toggle split · x skip · Enter accept · Esc skip song</pre>
   </div>
 </template>
 
@@ -67,7 +54,7 @@ import { computePeaks as _computePeaks } from '../utils/audio.js'
 // ── Constants ────────────────────────────────────────────────────────────────
 
 const PPS         = 200   // peaks per second
-const MINI        = 50    // minimap height px
+const MINI_FRAC   = 0.20  // minimap takes ~20% of canvas height
 const BAR_FRAC    = 0.15  // current bar occupies this fraction of view width
 const MAX_SUBDIV  = 8
 
@@ -279,6 +266,7 @@ function draw() {
   const ctx = el.getContext('2d')
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
+  const MINI = Math.round(H * MINI_FRAC)
   const MAIN = H - MINI - 2
   const MID  = MAIN / 2
 
@@ -339,6 +327,78 @@ function draw() {
     if (segX0 > 0) ctx.fillRect(0,             0, Math.min(segX0, W),       MAIN)
     if (segX1 < W) ctx.fillRect(Math.max(segX1, 0), 0, W - Math.max(segX1, 0), MAIN)
   }
+
+  // ── Segment brackets (main view) ──────────────────────────────────────────
+  // Thick bottom brackets for every segment, with 10px gaps at split boundaries.
+  const bracketY = MAIN - 16
+  const bracketCap = Math.max(10, Math.round(MAIN * 0.5 - 16))
+  const splitCenterOffset = 10
+  ctx.save()
+  ctx.textBaseline = 'alphabetic'
+  ctx.font = 'bold 12px monospace'
+  ctx.lineCap = 'round'
+  ctx.lineJoin = 'round'
+  for (let si = 0; si < segments.value.length; si++) {
+    const seg = segments.value[si]
+    if (seg.endTime < vs - 0.5 || seg.startTime > ve + 0.5) continue
+    const x0 = ((seg.startTime - vs) / vd) * W
+    const x1 = ((seg.endTime   - vs) / vd) * W
+    const sx0 = Math.max(0, Math.min(W, x0))
+    const sx1 = Math.max(0, Math.min(W, x1))
+    if (sx1 - sx0 < 1) continue
+    const showLeftArm = x0 >= 0 && x0 <= W
+    const showRightArm = x1 >= 0 && x1 <= W
+
+    // Place each segment edge center 10px away from split center.
+    // With 10px stroke width this yields a true 10px empty gap.
+    const leftInset = si > 0 ? splitCenterOffset : 0
+    const rightInset = si < segments.value.length - 1 ? splitCenterOffset : 0
+    const bx0 = sx0 + leftInset
+    const bx1 = sx1 - rightInset
+    if (bx1 - bx0 < 2) continue
+
+    if (seg.status === 'accepted') {
+      ctx.strokeStyle = 'rgba(0, 220, 100, 0.5)'
+    } else if (seg.status === 'skipped') {
+      ctx.strokeStyle = 'rgba(255, 90, 90, 0.5)'
+    } else {
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)'
+    }
+    ctx.lineWidth = 10
+
+    ctx.beginPath()
+    ctx.moveTo(bx0, bracketY)
+    ctx.lineTo(bx1, bracketY)
+    if (showLeftArm) {
+      ctx.moveTo(bx0, bracketY)
+      ctx.lineTo(bx0, bracketY - bracketCap)
+    }
+    if (showRightArm) {
+      ctx.moveTo(bx1, bracketY)
+      ctx.lineTo(bx1, bracketY - bracketCap)
+    }
+    ctx.stroke()
+
+    // Per-segment time signature centered over the visible bracket span.
+    const sig = `${seg.bpb}/${bpd.value}`
+    const labelY = bracketY - bracketCap - 9
+    const labelX = (bx0 + bx1) / 2
+    const tm = ctx.measureText(sig)
+    const asc = tm.actualBoundingBoxAscent || 8
+    const desc = tm.actualBoundingBoxDescent || 4
+    const padX = 7
+    const padY = 4
+    const textW = tm.width
+    const boxW = textW + padX * 2
+    const boxTop = labelY - asc - padY
+    const boxH = asc + desc + padY * 2
+    ctx.fillStyle = 'rgba(10, 10, 20, 0.8)'
+    ctx.fillRect(labelX - boxW / 2, boxTop, boxW, boxH)
+    ctx.fillStyle = 'rgba(220, 240, 255, 0.96)'
+    ctx.textAlign = 'center'
+    ctx.fillText(sig, labelX, labelY)
+  }
+  ctx.restore()
 
   // ── Beat & sub-beat lines (per segment, each with its own bpb/subdivision) ──
   const cursorTime = bi >= 0 && bi < sb.length ? sb[bi] : -1
@@ -465,6 +525,7 @@ function drawPlayhead() {
 
   if (!isPlaying.value || !audioCtx || !source) return
 
+  const MINI = Math.round(H * MINI_FRAC)
   const MAIN = H - MINI - 2
   const elapsed = audioCtx.currentTime - srcStartCtx
   let pos
@@ -812,6 +873,18 @@ function onKeyDown(e) {
     e.preventDefault()
     setSubdivision(subdivision.value - 1)
 
+  } else if (e.key === '+' || code === 'NumpadAdd') {
+    e.preventDefault()
+    adjustChunks(1)
+
+  } else if (e.key === '-' || code === 'NumpadSubtract') {
+    e.preventDefault()
+    adjustChunks(-1)
+
+  } else if (e.key === '=') {
+    e.preventDefault()
+    chunksPerSong.value = chunksPerSongDefault.value
+
   } else if (e.key === ' ') {
     e.preventDefault()
     loopMode.value = true
@@ -823,24 +896,80 @@ function onKeyDown(e) {
     togglePlay()
 
   } else if (e.key === 'c') {
-    // Cut current segment at the current beat position
+    // Toggle split at current beat:
+    // - if cursor is on an existing segment boundary, merge boundary-adjacent segments
+    // - otherwise split the containing segment at this beat
     e.preventDefault()
+    if (beatIdx.value >= sb.length) return
+    const cutTime = sb[beatIdx.value]
+    const EPS = 1e-6
+
+    // 1) Merge toggle: boundary exists at cutTime
+    let merged = false
+    for (let i = 0; i < segments.value.length - 1; i++) {
+      const left = segments.value[i]
+      const right = segments.value[i + 1]
+      if (Math.abs(left.endTime - cutTime) < EPS && Math.abs(right.startTime - cutTime) < EPS) {
+        const mergedBeats = [...left.beat_times, ...right.beat_times]
+        const uniqBeats = []
+        for (const t of mergedBeats.sort((a, b) => a - b)) {
+          const prev = uniqBeats[uniqBeats.length - 1]
+          if (prev === undefined || Math.abs(prev - t) > EPS) uniqBeats.push(t)
+        }
+        const mergedSeg = {
+          ...left,
+          id: left.id,
+          startTime: left.startTime,
+          endTime: right.endTime,
+          beat_times: uniqBeats,
+          tempo: (left.tempo + right.tempo) / 2,
+          status: 'pending',
+          bpb: left.bpb,
+          subdivision: left.subdivision,
+          beatOffset: left.beatOffset ?? 0,
+        }
+        const newSegs = [...segments.value]
+        newSegs.splice(i, 2, mergedSeg)
+        newSegs.forEach((s, idx2) => { s.id = idx2 })
+        segments.value = newSegs
+        merged = true
+        break
+      }
+    }
+    if (merged) { draw(); return }
+
+    // 2) Split toggle: split containing segment
     const idx = currentSegmentIdx.value
     const seg = segments.value[idx]
-    if (!seg || beatIdx.value >= sb.length) return
-    const cutTime = sb[beatIdx.value]
-    if (cutTime <= seg.startTime || cutTime >= seg.endTime) return
+    if (!seg) return
+    if (cutTime <= seg.startTime + EPS || cutTime >= seg.endTime - EPS) return
 
-    const beforeBeats = seg.beat_times.filter(t => t < cutTime)
-    const afterBeats  = seg.beat_times.filter(t => t >= cutTime)
-    if (beforeBeats.length < 4 || afterBeats.length < 4) return   // too short
+    const beforeBeats = seg.beat_times.filter(t => t < cutTime - EPS)
+    const afterBeats  = seg.beat_times.filter(t => t >= cutTime - EPS)
+    if (beforeBeats.length < 4 || afterBeats.length < 4) return
 
-    const leftSeg  = { ...seg, endTime:   cutTime, beat_times: beforeBeats, status: 'pending', bpb: bpb.value, subdivision: subdivision.value, beatOffset: seg.beatOffset ?? 0 }
-    const rightSeg = { ...seg, startTime: cutTime, beat_times: afterBeats,  status: 'pending', bpb: bpb.value, subdivision: subdivision.value, beatOffset: 0 }
+    const leftSeg  = {
+      ...seg,
+      endTime: cutTime,
+      beat_times: beforeBeats,
+      status: 'pending',
+      bpb: bpb.value,
+      subdivision: subdivision.value,
+      beatOffset: seg.beatOffset ?? 0,
+    }
+    const rightSeg = {
+      ...seg,
+      startTime: cutTime,
+      beat_times: afterBeats,
+      status: 'pending',
+      bpb: bpb.value,
+      subdivision: subdivision.value,
+      beatOffset: 0,
+    }
 
     const newSegs = [...segments.value]
     newSegs.splice(idx, 1, leftSeg, rightSeg)
-    newSegs.forEach((s, i) => { s.id = i })
+    newSegs.forEach((s, idx2) => { s.id = idx2 })
     segments.value = newSegs
     draw()
 
@@ -892,6 +1021,7 @@ function onCanvasClick(e) {
   if (!el || !peaks) return
   const rect = el.getBoundingClientRect()
   const y    = e.clientY - rect.top
+  const MINI = Math.round(rect.height * MINI_FRAC)
   const MAIN = rect.height - MINI - 2
   if (y <= MAIN) return
 
@@ -958,7 +1088,7 @@ html, body {
   flex-direction: column;
   height: 100vh;
   padding: 8px;
-  gap: 5px;
+  gap: 0.7rem;
 }
 
 /* ── Top status bar ─────────────────────────────────────────────────────────── */
@@ -997,40 +1127,15 @@ html, body {
 .status-live {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-evenly;
+  gap: 12px;
+  width: 100%;
   font-size: 1rem;
   color: #fff;
   flex-shrink: 0;
 }
 
 .status-info { color: #ccc }
-
-.chunk-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.chunk-btn {
-  min-width: 24px;
-  height: 24px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
-  background: rgba(255, 255, 255, 0.08);
-  color: #fff;
-  border-radius: 3px;
-  font-weight: bold;
-  cursor: pointer;
-}
-
-.chunk-btn:disabled {
-  opacity: 0.45;
-  cursor: default;
-}
-
-.chunk-value {
-  color: #bfe9ff;
-  min-width: 78px;
-}
 
 /* ── Segment status pill ────────────────────────────────────────────────────── */
 
@@ -1050,12 +1155,11 @@ html, body {
 
 .timesig {
   display: inline-flex;
-  flex-direction: column;
   align-items: center;
-  line-height: 1.1;
+  line-height: 1;
   font-size: 1rem;
   font-weight: bold;
-  gap: 1px;
+  gap: 4px;
 }
 
 .ts-num {
@@ -1070,6 +1174,10 @@ html, body {
   background: rgba(255, 105, 180, 0.10);
   padding: 0 6px;
   border-radius: 2px;
+}
+
+.ts-sep {
+  color: #cfcfcf;
 }
 
 /* ── Badges ──────────────────────────────────────────────────────────────────── */
@@ -1087,8 +1195,9 @@ html, body {
 .badge-subdiv    { color: #ffd740; background: rgba(255,215,64,0.12) }
 .badge-loop-on   { color: #00e5ff; background: rgba(0,229,255,0.10) }
 .badge-loop-off  { color: #ff9800; background: rgba(255,152,0,0.10) }
+.badge-pause     { color: #b0bec5; background: rgba(176,190,197,0.14) }
 .badge-typing  { color: #ff9800; background: rgba(255,152,0,0.12) }
-.badge-override { color: #8dff85; background: rgba(141,255,133,0.14) }
+.badge-chunks   { color: #8dff85; background: rgba(141,255,133,0.14) }
 
 /* ── Help text ───────────────────────────────────────────────────────────────── */
 
