@@ -26,6 +26,22 @@
 
     <div class="status-live">
       <template v-if="!serverDone && !serverError">
+        <div class="chunk-control">
+          <button
+            class="chunk-btn"
+            :disabled="loading || chunksPerSong <= 1"
+            @click.stop="adjustChunks(-1)"
+            title="Decrease chunks for this track"
+          >-</button>
+          <span class="chunk-value">chunks {{ chunksPerSong }}</span>
+          <button
+            class="chunk-btn"
+            :disabled="loading"
+            @click.stop="adjustChunks(1)"
+            title="Increase chunks for this track"
+          >+</button>
+          <span v-if="chunksPerSong !== chunksPerSongDefault" class="badge badge-override">override</span>
+        </div>
         <span class="timesig">
           <span class="ts-num">{{ bpb }}</span>
           <span class="ts-den">{{ bpd }}</span>
@@ -63,6 +79,8 @@ const currentFile    = ref('')
 const remaining      = ref(0)
 const loading        = ref(false)
 const preloadingNext = ref(false)
+const chunksPerSong = ref(3)
+const chunksPerSongDefault = ref(3)
 
 // ── Segment state ─────────────────────────────────────────────────────────────
 // Each segment: {id, startTime, endTime, beat_times, tempo, status, bpb}
@@ -624,6 +642,14 @@ function applyState(state) {
   currentFile.value    = state.filename    || ''
   remaining.value      = state.remaining   || 0
   preloadingNext.value = state.preloading  || false
+  const chunksDefault = Number.isFinite(state.chunks_per_song_default)
+    ? Math.max(1, Math.trunc(state.chunks_per_song_default))
+    : 3
+  const chunksCurrent = Number.isFinite(state.chunks_per_song)
+    ? Math.max(1, Math.trunc(state.chunks_per_song))
+    : chunksDefault
+  chunksPerSongDefault.value = chunksDefault
+  chunksPerSong.value = chunksCurrent
 
   segments.value = (state.segments || []).map(s => ({
     id:          s.id,
@@ -714,7 +740,15 @@ function fireSave() {
     bar_starts: computeBarStartsFor(s),
     status:     s.status,
   }))
-  apiAction('save', { segments: segsPayload })
+  apiAction('save', {
+    segments: segsPayload,
+    chunks_per_song: chunksPerSong.value,
+  })
+}
+
+function adjustChunks(delta) {
+  const next = Math.max(1, chunksPerSong.value + delta)
+  chunksPerSong.value = next
 }
 
 // Scroll to first beat of the next pending segment (returns true if found)
@@ -971,6 +1005,33 @@ html, body {
 
 .status-info { color: #ccc }
 
+.chunk-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chunk-btn {
+  min-width: 24px;
+  height: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-radius: 3px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.chunk-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.chunk-value {
+  color: #bfe9ff;
+  min-width: 78px;
+}
+
 /* ── Segment status pill ────────────────────────────────────────────────────── */
 
 .seg-status {
@@ -1027,6 +1088,7 @@ html, body {
 .badge-loop-on   { color: #00e5ff; background: rgba(0,229,255,0.10) }
 .badge-loop-off  { color: #ff9800; background: rgba(255,152,0,0.10) }
 .badge-typing  { color: #ff9800; background: rgba(255,152,0,0.12) }
+.badge-override { color: #8dff85; background: rgba(141,255,133,0.14) }
 
 /* ── Help text ───────────────────────────────────────────────────────────────── */
 

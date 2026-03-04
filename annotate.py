@@ -15,10 +15,12 @@ Production (serve built UI from Flask):
 """
 
 import argparse
+import json
 import os
 import random
 import secrets
 import threading
+from datetime import datetime, timezone
 from pathlib import Path
 
 import subprocess
@@ -54,6 +56,8 @@ def _make_parser() -> argparse.ArgumentParser:
                    help='Root folder to scan recursively (mp3/wav/flac/ogg/m4a)')
     p.add_argument('--out-path', required=True,
                    help='Chunk output directory')
+    p.add_argument('--annotations-path', default='./annotations',
+                   help='Directory for saved annotation JSON files')
     p.add_argument('--chunks-per-song', type=int, default=3)
     p.add_argument('--pitch-range', type=float, default=2.0)
     p.add_argument('--port', type=int, default=8050)
@@ -76,6 +80,7 @@ _files:         list[str]         = []     # remaining queue (mutated in-place)
 _state:         dict              = {'done': True}
 _args  = None
 _out_path: Path = None
+_annotations_path: Path = None
 
 # ── Background preload ────────────────────────────────────────────────────────
 
@@ -260,6 +265,42 @@ def _load_song_data(filepath: str) -> dict | None:
     }
 
 
+def _annotation_path_for(filepath: str) -> Path:
+    return _annotations_path / f'{Path(filepath).stem}.json'
+
+
+def _load_annotation(filepath: str) -> dict | None:
+    ap = _annotation_path_for(filepath)
+    if not ap.exists():
+        return None
+    try:
+        with ap.open('r', encoding='utf8') as f:
+            data = json.load(f)
+    except Exception as exc:
+        print(f'  Could not read annotation {ap.name}: {exc}')
+        return None
+    if not isinstance(data, dict):
+        return None
+    if not isinstance(data.get('segments'), list):
+        return None
+    return data
+
+
+def _save_annotation(filepath: str, segments: list[dict], chunks_per_song: int) -> None:
+    ap = _annotation_path_for(filepath)
+    payload = {
+        'version': 1,
+        'filepath': filepath,
+        'filename': Path(filepath).name,
+        'chunks_per_song': int(chunks_per_song),
+        'segments': segments,
+        'saved_at': datetime.now(timezone.utc).isoformat(),
+    }
+    _annotations_path.mkdir(parents=True, exist_ok=True)
+    with ap.open('w', encoding='utf8') as f:
+        json.dump(payload, f, ensure_ascii=True, indent=2)
+
+
 # ── preload helpers ───────────────────────────────────────────────────────────
 
 def _preload_worker(filepath: str) -> None:
@@ -323,6 +364,10 @@ def _advance(max_skip: int = 20) -> None:
         if not Path(filepath).exists():
             continue
         name = Path(filepath).name
+        ann = _load_annotation(filepath)
+        if ann is not None:
+            print(f'\n[annotate] {name} already annotated ({_annotation_path_for(filepath).name}), skipping')
+            continue
         print(f'\n[annotate] {name}  ({len(_files)} remaining)')
 
         # ── Use preloaded data if available ──────────────────────────────────
@@ -349,6 +394,8 @@ def _advance(max_skip: int = 20) -> None:
             'token':     token,
             'filename':  name,
             'segments':  [{'id': i, **seg} for i, seg in enumerate(data['segments'])],
+            'chunks_per_song_default': _args.chunks_per_song,
+            'chunks_per_song': _args.chunks_per_song,
             'remaining': len(_files),
         }
 
@@ -363,7 +410,12 @@ def _advance(max_skip: int = 20) -> None:
 def _public_state() -> dict:
     """Strip internal keys before sending to client."""
     if _state.get('done'):
-        return {'done': True, 'remaining': 0}
+        return {
+            'done': True,
+            'remaining': 0,
+            'chunks_per_song_default': _args.chunks_per_song if _args else 3,
+            'chunks_per_song': _args.chunks_per_song if _args else 3,
+        }
     with _preload_lock:
         preloading = _preload_thread is not None and _preload_thread.is_alive()
     return {
@@ -371,6 +423,8 @@ def _public_state() -> dict:
         'token':      _state['token'],
         'filename':   _state['filename'],
         'segments':   _state['segments'],
+        'chunks_per_song_default': _state.get('chunks_per_song_default', _args.chunks_per_song),
+        'chunks_per_song': _state.get('chunks_per_song', _args.chunks_per_song),
         'remaining':  _state['remaining'],
         'preloading': preloading,
     }
@@ -411,16 +465,27 @@ def api_action():
             payload_segs = data.get('segments', [])
             if not payload_segs:
                 return jsonify({'error': 'segments missing'}), 400
+            chunks_per_song = data.get('chunks_per_song', _args.chunks_per_song)
+            try:
+                chunks_per_song = int(chunks_per_song)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'chunks_per_song must be an integer'}), 400
+            if chunks_per_song < 1:
+                return jsonify({'error': 'chunks_per_song must be >= 1'}), 400
             # Capture refs now — _advance() will replace _current_audio
             audio_snap = _current_audio
             stem       = Path(_state['_filepath']).stem
+            filepath   = _state['_filepath']
             out_path   = str(_out_path)
-            n_chunks   = _args.chunks_per_song
             pitch_rng  = _args.pitch_range
+            try:
+                _save_annotation(filepath, payload_segs, chunks_per_song)
+            except Exception as exc:
+                return jsonify({'error': f'failed to save annotation: {exc}'}), 500
             def _chunk_worker():
                 n = process_audio_segmented(
                     audio_snap, payload_segs, stem,
-                    out_path, n_chunks, pitch_rng, overwrite=False,
+                    out_path, chunks_per_song, pitch_rng, overwrite=False,
                 )
                 print(f'  Saved {n} chunks for {stem}')
             threading.Thread(target=_chunk_worker, daemon=True).start()
@@ -460,10 +525,12 @@ def serve_ui(path):
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    global _args, _out_path
+    global _args, _out_path, _annotations_path
     _args     = _make_parser().parse_args()
     _out_path = Path(_args.out_path)
+    _annotations_path = Path(_args.annotations_path)
     _out_path.mkdir(parents=True, exist_ok=True)
+    _annotations_path.mkdir(parents=True, exist_ok=True)
 
     # Find already-processed stems
     done_stems: set[str] = set()
@@ -477,10 +544,17 @@ def main():
     # fresh random selection across the identified set every time.
     music_path = Path(_args.music_path)
     all_files = scan_audio_files(music_path)
-    _files[:] = [f for f in all_files if Path(f).stem not in done_stems]
+    annotated_stems = {p.stem for p in _annotations_path.glob('*.json')}
+    skip_stems = done_stems | annotated_stems
+    _files[:] = [f for f in all_files if Path(f).stem not in skip_stems]
     random.shuffle(_files)
 
-    print(f'Found {len(all_files)} audio files; {len(_files)} left to annotate')
+    print(
+        f'Found {len(all_files)} audio files; '
+        f'{len(done_stems)} have chunks; '
+        f'{len(annotated_stems)} have annotations; '
+        f'{len(_files)} left to annotate'
+    )
     if not _files:
         print('Nothing left to annotate.')
         return

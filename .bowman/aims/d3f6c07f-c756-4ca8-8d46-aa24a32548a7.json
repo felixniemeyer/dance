@@ -1,0 +1,22 @@
+{
+  "id": "d3f6c07f-c756-4ca8-8d46-aa24a32548a7",
+  "text": "use shtab for all scripts. replace argcomplete",
+  "description": "",
+  "tags": [],
+  "reflections": [],
+  "supportingConnections": [],
+  "supportedAims": [],
+  "committedIn": [],
+  "status": {
+    "state": "open",
+    "comment": "",
+    "date": 1772630100316
+  },
+  "intrinsicValue": 0,
+  "cost": 1,
+  "loopWeight": 1,
+  "duration": 1,
+  "costVariance": 0,
+  "valueVariance": 0,
+  "archived": false
+}
