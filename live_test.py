@@ -35,11 +35,28 @@ parser.add_argument('--window', type=float, default=8.0,
                     help='Scrolling display window in seconds (default: 8)')
 args = parser.parse_args()
 
+DESKTOP_KEYS = ('monitor', 'loopback', 'pulse', 'pipewire', 'stereo mix', 'what u hear')
+
+def _normalize_device_arg(device_arg):
+    if device_arg is None:
+        return None
+    if isinstance(device_arg, int):
+        return device_arg
+    s = str(device_arg).strip()
+    if s.lstrip('-').isdigit():
+        return int(s)
+    return device_arg
+
+
+def _get_input_devices():
+    return [(i, d) for i, d in enumerate(sd.query_devices()) if d['max_input_channels'] > 0]
+
+
 if args.list_devices:
-    for i, d in enumerate(sd.query_devices()):
-        if d['max_input_channels'] > 0:
-            tag = '  ← monitor' if 'monitor' in d['name'].lower() else ''
-            print(f"  [{i:2d}]  {d['name']}  ({int(d['default_samplerate'])} Hz){tag}")
+    for i, d in _get_input_devices():
+        name = d['name'].lower()
+        tag = '  ← desktop-capture candidate' if any(k in name for k in DESKTOP_KEYS) else ''
+        print(f"  [{i:2d}]  {d['name']}  ({int(d['default_samplerate'])} Hz){tag}")
     raise SystemExit
 
 if not args.checkpoint:
@@ -64,22 +81,53 @@ ckpt_name = '/'.join(args.checkpoint.replace('\\', '/').split('/')[-2:])
 
 # ── Device selection ──────────────────────────────────────────────────────────
 
-device = args.device
-if device is None:
-    for i, d in enumerate(sd.query_devices()):
-        if d['max_input_channels'] > 0 and 'monitor' in d['name'].lower():
-            device = i
-            break
-    if device is not None:
-        print(f"Auto-detected monitor: {sd.query_devices(device)['name']}")
-    else:
-        print('No monitor device found — using default input. Try --list-devices.')
+input_devices = _get_input_devices()
+if not input_devices:
+    raise RuntimeError('No input devices available.')
 
-dev_info  = sd.query_devices(device, 'input')
-native_sr = int(dev_info['default_samplerate'])
-_gcd      = gcd(TARGET_SR, native_sr)
-resamp_up, resamp_down = TARGET_SR // _gcd, native_sr // _gcd
-print(f'Device: {dev_info["name"]}  |  {native_sr} Hz → {TARGET_SR} Hz')
+device_arg = _normalize_device_arg(args.device)
+
+
+def _resolve_device_pos(device_choice):
+    if device_choice is None:
+        return None
+    if isinstance(device_choice, int):
+        for pos, (idx, _) in enumerate(input_devices):
+            if idx == device_choice:
+                return pos
+        raise ValueError(f'No input device matching index {device_choice}')
+    needle = str(device_choice).lower()
+    for pos, (_, d) in enumerate(input_devices):
+        if needle in d['name'].lower():
+            return pos
+    raise ValueError(f'No input device matching {device_choice!r}')
+
+
+def _autoselect_device_pos():
+    avoid = ('mic', 'microphone', 'analog stereo')
+    best_pos = 0
+    best_score = -1
+    for pos, (_, d) in enumerate(input_devices):
+        name = d['name'].lower()
+        score = 0
+        if any(k in name for k in DESKTOP_KEYS):
+            score += 10
+        if any(k in name for k in avoid):
+            score -= 3
+        if score > best_score:
+            best_score = score
+            best_pos = pos
+    return best_pos, best_score
+
+
+if device_arg is None:
+    current_device_pos, auto_score = _autoselect_device_pos()
+    if auto_score > 0:
+        print(f"Auto-detected desktop capture: {input_devices[current_device_pos][1]['name']}")
+    else:
+        print('No desktop-capture device found — using first input. Use ↑/↓ to scan devices.')
+else:
+    current_device_pos = _resolve_device_pos(device_arg)
 
 # ── Ring buffers (proc thread writes, display reads) ──────────────────────────
 
@@ -92,6 +140,11 @@ _lock      = threading.Lock()
 _queue     = queue.Queue()
 _tail      = np.zeros(0, dtype=np.float32)  # resampled samples not yet batched
 _gru_state = None
+_stream    = None
+_stream_lock = threading.Lock()
+native_sr = TARGET_SR
+resamp_up, resamp_down = 1, 1
+device_label = ''
 
 
 def _proc_loop():
@@ -142,6 +195,46 @@ def _on_audio(indata, frames, time_info, status):
         print(f'[sd] {status}')
     _queue.put(indata.copy())
 
+
+def _drain_queue():
+    while True:
+        try:
+            _queue.get_nowait()
+        except queue.Empty:
+            break
+
+
+def _switch_device(pos):
+    global _stream, native_sr, resamp_up, resamp_down
+    global _tail, _gru_state, current_device_pos, device_label
+
+    device_idx, dev_info = input_devices[pos]
+    native_sr = int(dev_info['default_samplerate'])
+    _gcd = gcd(TARGET_SR, native_sr)
+    resamp_up, resamp_down = TARGET_SR // _gcd, native_sr // _gcd
+
+    with _stream_lock:
+        if _stream is not None:
+            _stream.stop()
+            _stream.close()
+            _stream = None
+
+        _drain_queue()
+        _tail = np.zeros(0, dtype=np.float32)
+        _gru_state = None
+        with _lock:
+            mel_ring.fill(-10.0)
+            phase_ring.fill(np.nan)
+
+        _stream = sd.InputStream(
+            device=device_idx, channels=1, samplerate=native_sr,
+            blocksize=2048, dtype='float32', callback=_on_audio)
+        _stream.start()
+
+    current_device_pos = pos
+    device_label = f'[{device_idx}] {dev_info["name"]}'
+    print(f'Device: {device_label}  |  {native_sr} Hz → {TARGET_SR} Hz')
+
 # ── Plot ──────────────────────────────────────────────────────────────────────
 
 fig, ax = plt.subplots(figsize=(13, 4))
@@ -175,6 +268,22 @@ title_txt = ax.set_title(
     f'{ckpt_name}   phase: —', color='#888', fontsize=9, loc='left')
 
 
+def _set_title(cur_phase):
+    if np.isnan(cur_phase):
+        phase_txt = '—'
+    else:
+        phase_txt = f'{cur_phase:.3f}'
+    title_txt.set_text(f'{ckpt_name}   dev: {device_label}   phase: {phase_txt}')
+
+
+def _on_key(event):
+    if event.key not in ('up', 'down'):
+        return
+    delta = 1 if event.key == 'up' else -1
+    next_pos = (current_device_pos + delta) % len(input_devices)
+    _switch_device(next_pos)
+
+
 def _update(_):
     with _lock:
         mel_snap   = mel_ring.copy()
@@ -184,9 +293,9 @@ def _update(_):
     phase_line.set_ydata(phase_snap)
 
     cur = phase_snap[-1]
+    _set_title(cur)
     if not np.isnan(cur):
         phase_dot.set_data([xs[-1]], [cur])
-        title_txt.set_text(f'{ckpt_name}   phase: {cur:.3f}')
     else:
         phase_dot.set_data([], [])
 
@@ -194,11 +303,18 @@ def _update(_):
 
 
 ani = animation.FuncAnimation(fig, _update, interval=80, blit=True)  # ~12 fps
+fig.canvas.mpl_connect('key_press_event', _on_key)
 
 # ── Start ─────────────────────────────────────────────────────────────────────
 
-print(f'mel bins: {n_mels}  |  window: {args.window} s  |  close window to stop')
+print(f'mel bins: {n_mels}  |  window: {args.window} s')
+print('controls: ↑ next input device, ↓ previous input device, close window to stop')
 
-with sd.InputStream(device=device, channels=1, samplerate=native_sr,
-                    blocksize=2048, dtype='float32', callback=_on_audio):
+_switch_device(current_device_pos)
+try:
     plt.show()
+finally:
+    with _stream_lock:
+        if _stream is not None:
+            _stream.stop()
+            _stream.close()

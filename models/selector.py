@@ -22,8 +22,10 @@ def getModelClass(name):
             return value
     raise ModelNotImplemented('invalid model')
 
-def loadModel(file):
-    obj = torch.load(file)
+def loadModel(file, map_location=None):
+    if map_location is None and not torch.cuda.is_available():
+        map_location = torch.device('cpu')
+    obj = torch.load(file, map_location=map_location)
 
     model_type = obj['model_type']
     modelClass = getModelClass(model_type)
