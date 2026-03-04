@@ -11,3 +11,4 @@ tqdm
 dash
 plotly
 mlflow
+librosa

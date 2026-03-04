@@ -8,15 +8,16 @@ import time
 
 import argparse
 import re
+from pathlib import Path
 
 import subprocess
 
 import mlflow
 import torch
 from torch import nn, optim
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 
-from dancer_data import DanceDataset
+from dancer_data import DanceDataset, OnlineWaveAugmenter
 
 from models.selector import getModelClass, loadModel, getModels, saveModel
 
@@ -59,10 +60,38 @@ parser.add_argument("--plot-loss", action='store_true', default=False, help="plo
 
 parser.add_argument("--onnx", action='store_true', help="export model to onnx. Stored alongside checkpoints.")
 
+# online augmentation (label-preserving; train split only)
+parser.add_argument("--augment-online", action='store_true',
+                    help="Enable online waveform augmentation for train split.")
+parser.add_argument("--augment-ramp-epochs", type=int, default=5,
+                    help="Ramp online augmentation strength over N epochs (<=0 disables ramp).")
+parser.add_argument("--noise-corpus-path", type=str, default=None,
+                    help="Optional root path for recursive noise file scan.")
+parser.add_argument("--max-mask-seconds", type=float, default=8.0)
+parser.add_argument("--max-noise-seconds", type=float, default=8.0)
+parser.add_argument("--p-time-mask", type=float, default=0.15)
+parser.add_argument("--p-add-gaussian-snr", type=float, default=0.20)
+parser.add_argument("--p-add-gaussian-noise", type=float, default=0.10)
+parser.add_argument("--p-add-color-noise", type=float, default=0.10)
+parser.add_argument("--p-add-background-noise", type=float, default=0.10)
+parser.add_argument("--p-add-short-noises", type=float, default=0.10)
+parser.add_argument("--p-room-simulator", type=float, default=0.05)
+
 args = parser.parse_args()
 
 if args.warmup_seconds < 0:
     raise ValueError('warmup-seconds must be >= 0')
+if args.max_mask_seconds < 0 or args.max_noise_seconds < 0:
+    raise ValueError('max-mask-seconds and max-noise-seconds must be >= 0')
+
+for p_name in [
+    'p_time_mask', 'p_add_gaussian_snr', 'p_add_gaussian_noise',
+    'p_add_color_noise', 'p_add_background_noise', 'p_add_short_noises',
+    'p_room_simulator',
+]:
+    p = getattr(args, p_name)
+    if p < 0 or p > 1:
+        raise ValueError(f'{p_name} must be in [0, 1]')
 
 if args.tag is None:
     os.system('git log --decorate -n 1 > .git_tag.txt~')
@@ -106,30 +135,85 @@ if args.hidden is not None:
 # Initialize the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# Assuming you have prepared your dataset and DataLoader
-dataset = DanceDataset(args.chunks_path, config.frame_size, config.samplerate)
-print('dataset size: ', len(dataset))
+def _scan_noise_files(root):
+    exts = {'.wav', '.flac', '.ogg', '.mp3', '.m4a', '.aac'}
+    out = []
+    root_path = Path(root)
+    if not root_path.exists():
+        return out
+    for p in root_path.rglob('*'):
+        if p.is_file() and p.suffix.lower() in exts:
+            out.append(str(p))
+    return out
+
+
+# Build clean base dataset for indexing and split calculation
+base_dataset = DanceDataset(args.chunks_path, config.frame_size, config.samplerate)
+print('dataset size: ', len(base_dataset))
 print()
 
-data_size = len(dataset)
+all_indices = torch.randperm(len(base_dataset)).tolist()
 if args.dataset_size is not None:
-    if args.dataset_size > data_size:
+    if args.dataset_size > len(all_indices):
         print('dataset size is smaller than requested size')
         exit(0)
-    else:
-        data_size = args.dataset_size
-        indizes = torch.randperm(len(dataset))[:data_size]
-        dataset = torch.utils.data.Subset(dataset, indizes)
+    all_indices = all_indices[:args.dataset_size]
 
+data_size = len(all_indices)
 train_size = max(1, int(0.8 * data_size))
 val_size = data_size - train_size
+train_indices = all_indices[:train_size]
+val_indices = all_indices[train_size:]
 
-train_dataset, val_dataset = random_split(dataset, [train_size, val_size])
+augmenter = None
+noise_files = []
+online_aug_cfg = {
+    'enabled': args.augment_online,
+    'noise_corpus_path': args.noise_corpus_path,
+    'max_mask_seconds': args.max_mask_seconds,
+    'max_noise_seconds': args.max_noise_seconds,
+    'p_time_mask': args.p_time_mask,
+    'p_add_gaussian_snr': args.p_add_gaussian_snr,
+    'p_add_gaussian_noise': args.p_add_gaussian_noise,
+    'p_add_color_noise': args.p_add_color_noise,
+    'p_add_background_noise': args.p_add_background_noise,
+    'p_add_short_noises': args.p_add_short_noises,
+    'p_room_simulator': args.p_room_simulator,
+}
+if args.augment_online:
+    if args.noise_corpus_path:
+        noise_files = _scan_noise_files(args.noise_corpus_path)
+        if not noise_files:
+            print(f'warning: --noise-corpus-path set but no audio files found: {args.noise_corpus_path}')
+    augmenter = OnlineWaveAugmenter(config.samplerate, online_aug_cfg, noise_files=noise_files)
+    print('online augmentation: enabled')
+    print(f'  ramp epochs: {args.augment_ramp_epochs}')
+    print(f'  noise corpus files: {len(noise_files)}')
+    print(f'  p(time_mask)={args.p_time_mask} p(gaussian_snr)={args.p_add_gaussian_snr} p(gaussian_noise)={args.p_add_gaussian_noise}')
+    print(f'  p(color_noise)={args.p_add_color_noise} p(background_noise)={args.p_add_background_noise} p(short_noises)={args.p_add_short_noises} p(room)={args.p_room_simulator}')
+else:
+    print('online augmentation: disabled')
+
+train_base = DanceDataset(
+    args.chunks_path, config.frame_size, config.samplerate,
+    augmenter=augmenter if args.augment_online else None,
+    augment_ramp_epochs=args.augment_ramp_epochs if args.augment_online else 0,
+)
+val_base = DanceDataset(args.chunks_path, config.frame_size, config.samplerate)
+train_dataset = Subset(train_base, train_indices)
+val_dataset = Subset(val_base, val_indices) if val_size > 0 else None
 
 num_workers = args.num_workers if args.num_workers is not None else min(4, max(1, os.cpu_count() - 1))
 pin_memory = num_workers > 0
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=num_workers > 0, pin_memory=pin_memory, multiprocessing_context='fork' if num_workers > 0 else None)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers, persistent_workers=num_workers > 0, pin_memory=pin_memory, multiprocessing_context='fork' if num_workers > 0 else None) if val_size > 0 else None
+persistent = num_workers > 0 and not args.augment_online
+train_loader = DataLoader(
+    train_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers,
+    persistent_workers=persistent, pin_memory=pin_memory,
+    multiprocessing_context='fork' if num_workers > 0 else None)
+val_loader = DataLoader(
+    val_dataset, batch_size=batch_size, shuffle=True, num_workers=num_workers,
+    persistent_workers=num_workers > 0, pin_memory=pin_memory,
+    multiprocessing_context='fork' if num_workers > 0 else None) if val_dataset is not None else None
 
 # Load model from disk if it exists
 first_epoch = 0
@@ -209,7 +293,10 @@ mlflow.log_params({
     'warmup_seconds': args.warmup_seconds,
     'continued_from': args.continue_from,
     'chunks_path':    args.chunks_path,
-    'dataset_size':   len(dataset),
+    'dataset_size':   data_size,
+    'augment_online': int(args.augment_online),
+    'augment_ramp_epochs': args.augment_ramp_epochs,
+    'noise_files': len(noise_files),
 })
 if hasattr(model, 'hparams'):
     mlflow.log_params(model.hparams)
@@ -230,6 +317,13 @@ for epoch in range(first_epoch, last_epoch):
 
     print(f"\nEpoch {epoch+1} of {last_epoch}")
     print('Training')
+    if args.augment_online:
+        train_base.set_epoch(epoch - first_epoch)
+        if args.augment_ramp_epochs > 0:
+            aug_scale = min(1.0, float(epoch - first_epoch + 1) / float(args.augment_ramp_epochs))
+        else:
+            aug_scale = 1.0
+        print(f'Online augmentation strength: {aug_scale:.3f}')
 
     model.train()  # Set the model to training mode
     start_time = time.time()
