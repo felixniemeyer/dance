@@ -12,3 +12,6 @@ dash
 plotly
 mlflow
 librosa
+git+https://github.com/CPJKU/madmom.git
+pyrubberband
+argcomplete

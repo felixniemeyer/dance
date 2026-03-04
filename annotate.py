@@ -16,6 +16,7 @@ Production (serve built UI from Flask):
 
 import argparse
 import os
+import random
 import secrets
 import threading
 from pathlib import Path
@@ -471,10 +472,13 @@ def main():
         if len(parts) == 2:
             done_stems.add(parts[0])
 
-    # Collect audio files — shuffled, no duration filter (checked on load)
+    # Collect audio files and re-shuffle remaining candidates for this run.
+    # scan_audio_files() may return cached order; shuffle here guarantees
+    # fresh random selection across the identified set every time.
     music_path = Path(_args.music_path)
     all_files = scan_audio_files(music_path)
     _files[:] = [f for f in all_files if Path(f).stem not in done_stems]
+    random.shuffle(_files)
 
     print(f'Found {len(all_files)} audio files; {len(_files)} left to annotate')
     if not _files:

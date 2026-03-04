@@ -17,6 +17,11 @@ import os
 import random
 import subprocess
 
+try:
+    import argcomplete
+except ImportError:
+    argcomplete = None
+
 import numpy as np
 import soundfile
 import torch
@@ -36,6 +41,8 @@ parser.add_argument('--music-path',       type=str, default=None,
 parser.add_argument('--checkpoints-path', type=str, default='checkpoints')
 parser.add_argument('--port',             type=int, default=8051)
 parser.add_argument('--host',             default='0.0.0.0')
+if argcomplete is not None:
+    argcomplete.autocomplete(parser)
 args = parser.parse_args()
 
 # ── Discovery ──────────────────────────────────────────────────────────────────
